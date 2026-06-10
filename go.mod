@@ -7,6 +7,7 @@ toolchain go1.26.4
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
+	github.com/zsoftly/zcp-cli v0.0.14
 )
 
 require (
@@ -32,7 +33,3 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// Local dev: point zcp-cli to the sibling checkout.
-// Remove this replace and set a real version before releasing.
-replace github.com/zsoftly/zcp-cli => ../zcp-cli
