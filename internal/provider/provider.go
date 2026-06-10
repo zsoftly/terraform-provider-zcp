@@ -3,6 +3,8 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -86,6 +88,15 @@ func (p *ZCPProvider) Configure(ctx context.Context, req provider.ConfigureReque
 	}
 	if !config.APIURL.IsNull() && !config.APIURL.IsUnknown() {
 		apiURL = config.APIURL.ValueString()
+	}
+
+	// Validate api_url is a parseable absolute URL.
+	if u, err := url.ParseRequestURI(apiURL); err != nil || u.Host == "" {
+		resp.Diagnostics.AddError(
+			"Invalid api_url",
+			fmt.Sprintf("%q is not a valid URL: must be an absolute HTTP/HTTPS URL.", apiURL),
+		)
+		return
 	}
 
 	// default_project: HCL attribute > env var.

@@ -12,18 +12,24 @@ The ZCP provider manages [ZSoftly Cloud Platform](https://zcp.zsoftly.ca) resour
 
 ```terraform
 provider "zcp" {
-  endpoint = "https://api.zcp.zsoftly.ca/api"
-  token    = var.zcp_token
+  bearer_token    = var.zcp_bearer_token
+  default_project = "default"
 }
 ```
 
 ## Authentication
 
-Set `ZCP_TOKEN` (and optionally `ZCP_ENDPOINT`) in your environment, or configure them in the provider block. The token is a ZCP API bearer token obtained from the ZCP dashboard under **Account → API Keys**.
+Set `ZCP_BEARER_TOKEN` in your environment — no HCL attribute is required. Optionally set `ZCP_API_URL` to override the endpoint and `ZCP_PROJECT` to set a default project. The bearer token is obtained from the ZCP dashboard under **Account → API Keys**.
+
+```bash
+export ZCP_BEARER_TOKEN="<your-token>"
+export ZCP_PROJECT="default"   # optional
+```
 
 ## Schema
 
 ### Optional
 
-- `endpoint` (String) ZCP API endpoint URL. Defaults to `ZCP_ENDPOINT` environment variable.
-- `token` (String, Sensitive) ZCP API bearer token. Defaults to `ZCP_TOKEN` environment variable.
+- `bearer_token` (String, Sensitive) ZCP API bearer token. May also be set via `ZCP_BEARER_TOKEN`. Required — either the attribute or the environment variable must be set.
+- `api_url` (String) ZCP API base URL. Defaults to `https://api.zcp.zsoftly.ca/api`. May also be set via `ZCP_API_URL`.
+- `default_project` (String) Default project slug applied to resources that omit a project. May also be set via `ZCP_PROJECT`.
