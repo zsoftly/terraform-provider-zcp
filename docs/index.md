@@ -12,7 +12,7 @@ The ZCP provider manages [ZSoftly Cloud Platform](https://zcp.zsoftly.ca) resour
 
 ```terraform
 provider "zcp" {
-  endpoint = "https://api.zsoftly.com"
+  endpoint = "https://api.zcp.zsoftly.ca/api"
   token    = var.zcp_token
 }
 ```

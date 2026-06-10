@@ -39,7 +39,7 @@ func (p *ZCPProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *
 		MarkdownDescription: "The ZCP provider manages ZSoftly Cloud Platform resources.",
 		Attributes: map[string]schema.Attribute{
 			"endpoint": schema.StringAttribute{
-				MarkdownDescription: "ZCP API endpoint URL. Defaults to `ZCP_ENDPOINT` environment variable.",
+				MarkdownDescription: "ZCP API endpoint URL. Defaults to `ZCP_ENDPOINT` environment variable. Default: `https://api.zcp.zsoftly.ca/api`.",
 				Optional:            true,
 			},
 			"token": schema.StringAttribute{
@@ -58,7 +58,10 @@ func (p *ZCPProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		return
 	}
 
-	endpoint := os.Getenv("ZCP_ENDPOINT")
+	endpoint := "https://api.zcp.zsoftly.ca/api"
+	if v := os.Getenv("ZCP_ENDPOINT"); v != "" {
+		endpoint = v
+	}
 	if !config.Endpoint.IsNull() {
 		endpoint = config.Endpoint.ValueString()
 	}
