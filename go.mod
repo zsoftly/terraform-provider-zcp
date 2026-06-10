@@ -33,7 +33,3 @@ require (
 	google.golang.org/grpc v1.79.3 // indirect
 	google.golang.org/protobuf v1.36.11 // indirect
 )
-
-// Local dev: point zcp-cli to the sibling checkout.
-// Remove this replace and set a real version before releasing.
-replace github.com/zsoftly/zcp-cli => ../zcp-cli
