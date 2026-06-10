@@ -123,5 +123,8 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 func (p *ZCPProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewProjectDataSource,
+		NewRegionDataSource,
+		NewTemplateDataSource,
+		NewPlanDataSource,
 	}
 }

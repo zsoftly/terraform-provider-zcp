@@ -10,12 +10,71 @@ The ZCP provider manages [ZSoftly Cloud Platform](https://zcp.zsoftly.ca) resour
 
 ## Example Usage
 
+**OpenTofu (primary):**
+
 ```terraform
+terraform {
+  required_providers {
+    zcp = {
+      source  = "registry.opentofu.org/zsoftly/zcp"
+      version = "~> 0.1"
+    }
+  }
+}
+
 provider "zcp" {
   bearer_token    = var.zcp_bearer_token
   default_project = "default"
 }
 ```
+
+**Terraform:**
+
+```terraform
+terraform {
+  required_providers {
+    zcp = {
+      source  = "registry.terraform.io/zsoftly/zcp"
+      version = "~> 0.1"
+    }
+  }
+}
+
+provider "zcp" {
+  bearer_token    = var.zcp_bearer_token
+  default_project = "default"
+}
+```
+
+## Local Development
+
+During development, use `dev_overrides` instead of a registry install. A single binary works for both CLIs via config:
+
+```hcl
+# ~/.tofurc (OpenTofu)
+provider_installation {
+  dev_overrides {
+    "registry.opentofu.org/zsoftly/zcp" = "/path/to/terraform-provider-zcp"
+  }
+  direct {}
+}
+```
+
+```hcl
+# ~/.terraformrc (Terraform)
+provider_installation {
+  dev_overrides {
+    "registry.terraform.io/zsoftly/zcp" = "/path/to/terraform-provider-zcp"
+  }
+  direct {}
+}
+```
+
+For non-dev_overrides local installs, the binary must be compiled with the correct registry address. The Makefile handles this:
+
+- `make install` — builds with `registry.opentofu.org` address, installs to `~/.opentofu/plugins/`
+- `make install-terraform` — builds with `registry.terraform.io` address, installs to `~/.terraform.d/plugins/`
+- `make dev-install` — rebuilds in-place for dev_overrides workflows
 
 ## Authentication
 
