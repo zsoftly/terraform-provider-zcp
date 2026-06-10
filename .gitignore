@@ -1,0 +1,98 @@
+# ──────────────────────────────────────────────
+# Terraform / OpenTofu
+# ──────────────────────────────────────────────
+**/.terraform/*
+*.tfstate
+*.tfstate.*
+*.tfplan
+plan.out
+plan.json
+
+# Override files (may contain sensitive info)
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Lock files (committed intentionally via terraform init; ignore local copies)
+.terraform.lock.hcl
+
+# Local dev CLI config — do NOT commit your personal .terraformrc
+.terraformrc
+terraform.rc
+terraform.tfvars
+
+# ──────────────────────────────────────────────
+# Go (matches zcp-cli baseline)
+# ──────────────────────────────────────────────
+bin/
+*.test
+coverage.out
+coverage.html
+
+# Provider binary (built by make build / make install)
+terraform-provider-zcp
+terraform-provider-zcp.exe
+
+# Go workspace files (used for local multi-module dev; not committed)
+go.work
+go.work.sum
+
+# ──────────────────────────────────────────────
+# Terraform provider development
+# ──────────────────────────────────────────────
+# goreleaser build output
+dist/
+
+# Acceptance test scratch files
+testdata/terraform.tfstate*
+testdata/.terraform/
+
+# Generated provider docs (produced by tfplugindocs; commit the output)
+# docs/ is intentionally NOT ignored — tfplugindocs output is committed
+
+# ──────────────────────────────────────────────
+# Sensitive / credentials
+# ──────────────────────────────────────────────
+**/.env
+**/.env.*
+*.pem
+*.key
+credentials
+config
+# Allow Go packages named 'config'
+!internal/config/
+
+# ──────────────────────────────────────────────
+# OS / editor
+# ──────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*~
+.directory
+*.swp
+*.swo
+*.bak
+.~lock.*
+
+# IDE
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# ──────────────────────────────────────────────
+# Misc (matches zcp-cli)
+# ──────────────────────────────────────────────
+*.log
+node_modules/
+.claude/settings.local.json
+IMPLEMENTATION_SUMMARY_*.md
+tmp/*
+!tmp/.gitkeep
