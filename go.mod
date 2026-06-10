@@ -7,6 +7,7 @@ toolchain go1.26.4
 require (
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
+	github.com/zsoftly/zcp-cli v0.0.14
 )
 
 require (
