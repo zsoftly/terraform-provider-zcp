@@ -56,8 +56,8 @@ After import, write-only fields (`cloud_provider`, `region`, `project`, `size`, 
 - `description` (String) Human-readable description.
 - `type` (String) VPC type (e.g. `Vpc`). Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Changing this forces replacement.
-- `plan` (String) Plan slug for VPC compute resources (e.g. `virtual-private-cloud-vpc-1`). Changing this forces replacement.
-- `storage_category` (String) Storage category slug (e.g. `nvme`, `pro-nvme`). Required by the API when creating a VPC. Changing this forces replacement.
+- `plan` (String) Plan slug for VPC compute resources. Run `zcp plan router` to list available plans (e.g. `virtual-private-cloud-vpc-1` for 5 Gbps, `virtual-private-cloud-vpc` for 50 Mbps). Changing this forces replacement.
+- `storage_category` (String) Storage category slug. Run `zcp storage-category list` to list available values (e.g. `nvme`, `pro-nvme`, `premium-ssd`). Changing this forces replacement.
 
 ### Read-Only
 

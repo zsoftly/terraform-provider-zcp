@@ -40,6 +40,8 @@ type networkResourceModel struct {
 	Project       types.String `tfsdk:"project"`
 	Description   types.String `tfsdk:"description"`
 	CategorySlug  types.String `tfsdk:"category_slug"`
+	VPC           types.String `tfsdk:"vpc"`
+	BillingCycle  types.String `tfsdk:"billing_cycle"`
 	// Computed
 	Gateway  types.String   `tfsdk:"gateway"`
 	CIDR     types.String   `tfsdk:"cidr"`
@@ -93,9 +95,20 @@ func (r *networkResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				MarkdownDescription: "Network category slug. Not returned by the API after creation; changes force replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
+			"vpc": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "VPC slug to create this as a subnet within. Omit for standalone isolated networks.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"billing_cycle": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Required when `vpc` is set.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
 			"gateway": schema.StringAttribute{
+				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Network gateway IP address.",
+				MarkdownDescription: "Network gateway IP address. Specify for VPC subnets; computed for isolated networks.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"cidr": schema.StringAttribute{
@@ -104,8 +117,9 @@ func (r *networkResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"netmask": schema.StringAttribute{
+				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Network subnet mask.",
+				MarkdownDescription: "Network subnet mask. Specify for VPC subnets; computed for isolated networks.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 		},
@@ -156,6 +170,12 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 		project = model.Project.ValueString()
 	}
 
+	vpc := model.VPC.ValueString()
+	netType := "Isolated"
+	if vpc != "" {
+		netType = "Vpc"
+	}
+
 	net, err := r.svc.Create(ctx, network.CreateRequest{
 		Name:          model.Name.ValueString(),
 		CloudProvider: model.CloudProvider.ValueString(),
@@ -163,6 +183,11 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 		Project:       project,
 		Description:   model.Description.ValueString(),
 		CategorySlug:  model.CategorySlug.ValueString(),
+		VPC:           vpc,
+		BillingCycle:  model.BillingCycle.ValueString(),
+		Gateway:       model.Gateway.ValueString(),
+		Netmask:       model.Netmask.ValueString(),
+		Type:          netType,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create network", err.Error())
@@ -201,6 +226,12 @@ func (r *networkResource) Read(ctx context.Context, req resource.ReadRequest, re
 			model.Gateway = types.StringValue(n.Gateway)
 			model.CIDR = types.StringValue(n.CIDR)
 			model.Netmask = types.StringValue(n.Netmask)
+			if n.VPC != "" {
+				model.VPC = types.StringValue(n.VPC)
+			}
+			if n.BillingCycle != "" {
+				model.BillingCycle = types.StringValue(n.BillingCycle)
+			}
 			// cloud_provider, region, project, category_slug are write-only (not in API response);
 			// preserved from state.
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)

@@ -75,6 +75,33 @@ resource "zcp_vpc_vpn_gateway" "yow_test" {
   vpc = zcp_vpc.yow_test.id
 }
 
+# ── Networks ──────────────────────────────────────────────────────────────────
+
+resource "zcp_network" "yow_test" {
+  name           = "tf2-test-network-yow"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  description    = "Terraform (tf) provider live test — network YOW"
+}
+
+resource "zcp_network" "yul_test" {
+  name           = "tf2-test-network-yul"
+  cloud_provider = data.zcp_region.yul.cloud_provider
+  region         = data.zcp_region.yul.slug
+  description    = "Terraform (tf) provider live test — network YUL"
+}
+
+# ── VPC Subnets ───────────────────────────────────────────────────────────────
+
+resource "zcp_network" "yow_subnet" {
+  name           = "tf2-test-subnet-yow"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  vpc            = zcp_vpc.yow_test.id
+  billing_cycle  = "hourly"
+  description    = "Terraform (tf) provider live test — VPC subnet YOW"
+}
+
 # ── Outputs ───────────────────────────────────────────────────────────────────
 
 output "yow_vpc_id" {
@@ -103,4 +130,16 @@ output "test_cgw_id" {
 
 output "yow_vpc_vpn_gw_id" {
   value = zcp_vpc_vpn_gateway.yow_test.id
+}
+
+output "yow_network_id" {
+  value = zcp_network.yow_test.id
+}
+
+output "yul_network_id" {
+  value = zcp_network.yul_test.id
+}
+
+output "yow_subnet_id" {
+  value = zcp_network.yow_subnet.id
 }

@@ -48,6 +48,8 @@ type networkStateModel struct {
 	Project       types.String   `tfsdk:"project"`
 	Description   types.String   `tfsdk:"description"`
 	CategorySlug  types.String   `tfsdk:"category_slug"`
+	VPC           types.String   `tfsdk:"vpc"`
+	BillingCycle  types.String   `tfsdk:"billing_cycle"`
 	Gateway       types.String   `tfsdk:"gateway"`
 	CIDR          types.String   `tfsdk:"cidr"`
 	Netmask       types.String   `tfsdk:"netmask"`
@@ -80,6 +82,8 @@ func createNetwork(t *testing.T, svc *fakeNetworkService, name, region, provider
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, nil),
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),
 		"netmask":        tftypes.NewValue(tftypes.String, nil),
@@ -113,6 +117,8 @@ func readNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.Re
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, nil),
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
 		"netmask":        tftypes.NewValue(tftypes.String, "255.255.255.0"),
@@ -137,6 +143,8 @@ func deleteNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, nil),
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
 		"netmask":        tftypes.NewValue(tftypes.String, "255.255.255.0"),
@@ -264,6 +272,8 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "old-desc"),
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
 		"netmask":        tftypes.NewValue(tftypes.String, "255.255.255.0"),
@@ -277,6 +287,8 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "new-desc"),
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),
 		"netmask":        tftypes.NewValue(tftypes.String, nil),
@@ -327,6 +339,8 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "old-desc"),
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
 		"netmask":        tftypes.NewValue(tftypes.String, "255.255.255.0"),
@@ -341,6 +355,8 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, ""),
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
+		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),
 		"netmask":        tftypes.NewValue(tftypes.String, nil),

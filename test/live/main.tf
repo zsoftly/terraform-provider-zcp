@@ -75,17 +75,32 @@ resource "zcp_vpc_vpn_gateway" "yow_test" {
   vpc = zcp_vpc.yow_test.id
 }
 
-# Blocked: SSH key creation hits a CMP PHP null-pointer bug on the backend.
-# resource "zcp_ssh_key" "test" { ... }
+# ── Networks ──────────────────────────────────────────────────────────────────
 
-# Blocked: Network categories not configured in CMP for yow-1/yul-1 (HTTP 403).
-# resource "zcp_network" "yow_test" { ... }
-# resource "zcp_network" "yul_test" { ... }
+resource "zcp_network" "yow_test" {
+  name           = "tf1-test-network-yow"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  description    = "Terraform provider live test — network YOW"
+}
 
-# Blocked: IP address allocation requires a VPC with at least one network.
-# resource "zcp_ip_address" "yow_test" { ... }
-# resource "zcp_port_forward" "http" { ... }
-# resource "zcp_firewall_rule" "allow_http" { ... }
+resource "zcp_network" "yul_test" {
+  name           = "tf1-test-network-yul"
+  cloud_provider = data.zcp_region.yul.cloud_provider
+  region         = data.zcp_region.yul.slug
+  description    = "Terraform provider live test — network YUL"
+}
+
+# ── VPC Subnets ───────────────────────────────────────────────────────────────
+
+resource "zcp_network" "yow_subnet" {
+  name           = "tf1-test-subnet-yow"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  vpc            = zcp_vpc.yow_test.id
+  billing_cycle  = "hourly"
+  description    = "Terraform provider live test — VPC subnet YOW"
+}
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
 
@@ -115,4 +130,16 @@ output "test_cgw_id" {
 
 output "yow_vpc_vpn_gw_id" {
   value = zcp_vpc_vpn_gateway.yow_test.id
+}
+
+output "yow_network_id" {
+  value = zcp_network.yow_test.id
+}
+
+output "yul_network_id" {
+  value = zcp_network.yul_test.id
+}
+
+output "yow_subnet_id" {
+  value = zcp_network.yow_subnet.id
 }

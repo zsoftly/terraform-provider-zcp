@@ -8,6 +8,8 @@ data "zcp_project" "default" {
 
 # ── Example 1: minimal VPC ────────────────────────────────────────────────────
 # cidr is the base network address (no prefix notation); size is the prefix length.
+# Run `zcp plan router` to list available VPC plans.
+# Available plans: virtual-private-cloud-vpc-1 (5 Gbps), virtual-private-cloud-vpc (50 Mbps)
 resource "zcp_vpc" "main" {
   name             = "main-vpc"
   cloud_provider   = data.zcp_region.yow.cloud_provider

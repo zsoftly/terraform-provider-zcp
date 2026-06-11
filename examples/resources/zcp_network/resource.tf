@@ -14,12 +14,11 @@ resource "zcp_network" "app" {
   region         = data.zcp_region.yow.slug
 }
 
-# ── Example 2: network with a specific category and description ───────────────
+# ── Example 2: network with a description ─────────────────────────────────────
 resource "zcp_network" "db" {
   name           = "db-network"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  category_slug  = "isolated"
   description    = "Private network for database tier"
 }
 
@@ -49,6 +48,28 @@ resource "zcp_network" "tier" {
   description    = each.value
 }
 
+# ── Example 5: VPC subnet ─────────────────────────────────────────────────────
+resource "zcp_vpc" "main" {
+  name             = "main-vpc"
+  cloud_provider   = data.zcp_region.yow.cloud_provider
+  region           = data.zcp_region.yow.slug
+  cidr             = "10.10.0.1"
+  size             = "24"
+  type             = "Vpc"
+  billing_cycle    = "hourly"
+  storage_category = "nvme"
+  plan             = "virtual-private-cloud-vpc-1"
+}
+
+resource "zcp_network" "subnet" {
+  name           = "app-subnet"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  vpc            = zcp_vpc.main.id
+  billing_cycle  = "hourly"
+  description    = "Application tier subnet inside main VPC"
+}
+
 # ── Outputs ───────────────────────────────────────────────────────────────────
 output "app_network_cidr" {
   value = zcp_network.app.cidr
@@ -56,4 +77,8 @@ output "app_network_cidr" {
 
 output "tier_network_ids" {
   value = { for k, v in zcp_network.tier : k => v.id }
+}
+
+output "subnet_id" {
+  value = zcp_network.subnet.id
 }
