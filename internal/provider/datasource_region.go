@@ -21,11 +21,12 @@ type regionDataSource struct {
 }
 
 type regionDataSourceModel struct {
-	Slug        types.String `tfsdk:"slug"`
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Country     types.String `tfsdk:"country"`
-	CountryCode types.String `tfsdk:"country_code"`
+	Slug          types.String `tfsdk:"slug"`
+	ID            types.String `tfsdk:"id"`
+	Name          types.String `tfsdk:"name"`
+	Country       types.String `tfsdk:"country"`
+	CountryCode   types.String `tfsdk:"country_code"`
+	CloudProvider types.String `tfsdk:"cloud_provider"`
 }
 
 func NewRegionDataSource() datasource.DataSource {
@@ -58,6 +59,10 @@ func (d *regionDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 			},
 			"country_code": schema.StringAttribute{
 				MarkdownDescription: "ISO country code.",
+				Computed:            true,
+			},
+			"cloud_provider": schema.StringAttribute{
+				MarkdownDescription: "Cloud provider slug for this region. Pass this to the `cloud_provider` argument of `zcp_network` and `zcp_vpc` resources.",
 				Computed:            true,
 			},
 		},
@@ -107,6 +112,11 @@ func (d *regionDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 			state.Name = types.StringValue(r.Name)
 			state.Country = types.StringValue(r.Country)
 			state.CountryCode = types.StringValue(r.CountryCode)
+			if r.CloudProvider != nil {
+				state.CloudProvider = types.StringValue(r.CloudProvider.Slug)
+			} else {
+				state.CloudProvider = types.StringValue("")
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}

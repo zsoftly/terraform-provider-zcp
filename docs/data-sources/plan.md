@@ -32,7 +32,7 @@ output "plan_monthly" {
 
 ### Optional
 
-- `service` (String) Service type to search. Defaults to `Virtual Machine`. Other values: `Kubernetes`, `Block Storage`, `Load Balancer`.
+- `service` (String) Service type to search. Defaults to `Virtual Machine`. Accepted values: `Virtual Machine`, `Virtual Router`, `Block Storage`, `Load Balancer`, `Kubernetes`, `IP Address`, `VM Snapshot`, `My Template`, `ISO`, `Backups`.
 
 ### Read-Only
 
