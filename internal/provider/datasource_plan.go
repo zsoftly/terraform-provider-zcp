@@ -14,7 +14,7 @@ import (
 var _ datasource.DataSource = &planDataSource{}
 
 type planLister interface {
-	List(ctx context.Context, svc plan.ServiceType) ([]plan.Plan, error)
+	List(ctx context.Context, svc plan.ServiceType, regionSlug string) ([]plan.Plan, error)
 }
 
 type planDataSource struct {
@@ -121,7 +121,9 @@ func (d *planDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		svcType = plan.ServiceType(state.Service.ValueString())
 	}
 
-	plans, err := d.svc.List(ctx, svcType)
+	// This data source has no region attribute; pass an empty region so the API
+	// returns plans across regions and the slug lookup below still resolves.
+	plans, err := d.svc.List(ctx, svcType, "")
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to list plans", err.Error())
 		return

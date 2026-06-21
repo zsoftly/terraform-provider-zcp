@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"os"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -109,6 +110,7 @@ func (p *ZCPProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		Client: httpclient.New(httpclient.Options{
 			BaseURL:     apiURL,
 			BearerToken: bearerToken,
+			Timeout:     5 * time.Minute,
 		}),
 		DefaultProject: defaultProject,
 	}
@@ -117,7 +119,17 @@ func (p *ZCPProvider) Configure(ctx context.Context, req provider.ConfigureReque
 }
 
 func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
-	return []func() resource.Resource{}
+	return []func() resource.Resource{
+		NewSSHKeyResource,
+		NewNetworkResource,
+		NewVPCResource,
+		NewFirewallRuleResource,
+		NewIPAddressResource,
+		NewVPNUserResource,
+		NewVPNCustomerGatewayResource,
+		NewPortForwardResource,
+		NewVPCVPNGatewayResource,
+	}
 }
 
 func (p *ZCPProvider) DataSources(_ context.Context) []func() datasource.DataSource {

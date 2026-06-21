@@ -24,11 +24,12 @@ func (f *fakeRegionLister) List(_ context.Context) ([]region.Region, error) {
 }
 
 type regionStateModel struct {
-	Slug        types.String `tfsdk:"slug"`
-	ID          types.String `tfsdk:"id"`
-	Name        types.String `tfsdk:"name"`
-	Country     types.String `tfsdk:"country"`
-	CountryCode types.String `tfsdk:"country_code"`
+	Slug          types.String `tfsdk:"slug"`
+	ID            types.String `tfsdk:"id"`
+	Name          types.String `tfsdk:"name"`
+	Country       types.String `tfsdk:"country"`
+	CountryCode   types.String `tfsdk:"country_code"`
+	CloudProvider types.String `tfsdk:"cloud_provider"`
 }
 
 func readRegionDS(t *testing.T, lister *fakeRegionLister, slug string) datasource.ReadResponse {
@@ -46,11 +47,12 @@ func readRegionDS(t *testing.T, lister *fakeRegionLister, slug string) datasourc
 
 	tfType := schResp.Schema.Type().TerraformType(context.Background())
 	configVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
-		"slug":         tftypes.NewValue(tftypes.String, slug),
-		"id":           tftypes.NewValue(tftypes.String, nil),
-		"name":         tftypes.NewValue(tftypes.String, nil),
-		"country":      tftypes.NewValue(tftypes.String, nil),
-		"country_code": tftypes.NewValue(tftypes.String, nil),
+		"slug":           tftypes.NewValue(tftypes.String, slug),
+		"id":             tftypes.NewValue(tftypes.String, nil),
+		"name":           tftypes.NewValue(tftypes.String, nil),
+		"country":        tftypes.NewValue(tftypes.String, nil),
+		"country_code":   tftypes.NewValue(tftypes.String, nil),
+		"cloud_provider": tftypes.NewValue(tftypes.String, nil),
 	})
 
 	readReq := datasource.ReadRequest{
@@ -63,11 +65,22 @@ func readRegionDS(t *testing.T, lister *fakeRegionLister, slug string) datasourc
 	return *readResp
 }
 
-// AC: slug matches → state populated with all attributes.
+// AC: slug matches → state populated with all attributes including cloud_provider.
+// Values match the real ZCP API response (verified 2026-06-10):
+//
+//	yow-1 → name "YOW-1", cloud_provider "nimbo", country "Canada"/"CA"
+//	yul-1 → name "YUL-1", cloud_provider "nimbo", country "Canada"/"CA"
 func TestRegionDataSource_found(t *testing.T) {
 	lister := &fakeRegionLister{
 		regions: []region.Region{
-			{ID: "r-001", Slug: "yow-1", Name: "Ottawa", Country: "Canada", CountryCode: "CA"},
+			{
+				ID:            "a19c99c6-7138-42c1-849d-4d888447c85d",
+				Slug:          "yow-1",
+				Name:          "YOW-1",
+				Country:       "Canada",
+				CountryCode:   "CA",
+				CloudProvider: &region.CloudProvider{Slug: "nimbo"},
+			},
 		},
 	}
 	resp := readRegionDS(t, lister, "yow-1")
@@ -80,10 +93,11 @@ func TestRegionDataSource_found(t *testing.T) {
 		t.Fatalf("reading state: %v", diags)
 	}
 	checks := map[string][2]string{
-		"ID":          {got.ID.ValueString(), "r-001"},
-		"Name":        {got.Name.ValueString(), "Ottawa"},
-		"Country":     {got.Country.ValueString(), "Canada"},
-		"CountryCode": {got.CountryCode.ValueString(), "CA"},
+		"ID":            {got.ID.ValueString(), "a19c99c6-7138-42c1-849d-4d888447c85d"},
+		"Name":          {got.Name.ValueString(), "YOW-1"},
+		"Country":       {got.Country.ValueString(), "Canada"},
+		"CountryCode":   {got.CountryCode.ValueString(), "CA"},
+		"CloudProvider": {got.CloudProvider.ValueString(), "nimbo"},
 	}
 	for field, pair := range checks {
 		if pair[0] != pair[1] {
@@ -92,9 +106,40 @@ func TestRegionDataSource_found(t *testing.T) {
 	}
 }
 
+// When the API returns a region without a cloud_provider (nil), cloud_provider is "".
+// The object-storage regions (os-yow, os-yul) use the "ceph" provider; the DNS
+// region uses "dns". Only compute regions (yow-1, yul-1) use "nimbo".
+func TestRegionDataSource_nilCloudProvider(t *testing.T) {
+	lister := &fakeRegionLister{
+		regions: []region.Region{
+			{
+				ID:            "a1c28c40-3961-467f-8cad-84b480208a42",
+				Slug:          "yul-1",
+				Name:          "YUL-1",
+				Country:       "Canada",
+				CountryCode:   "CA",
+				CloudProvider: nil,
+			},
+		},
+	}
+	resp := readRegionDS(t, lister, "yul-1")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got regionStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.CloudProvider.ValueString() != "" {
+		t.Errorf("CloudProvider = %q, want empty string for nil provider", got.CloudProvider.ValueString())
+	}
+}
+
 // AC: unknown slug returns a clear diagnostic.
 func TestRegionDataSource_notFound(t *testing.T) {
-	lister := &fakeRegionLister{regions: []region.Region{}}
+	lister := &fakeRegionLister{regions: []region.Region{
+		{ID: "a19c99c6-7138-42c1-849d-4d888447c85d", Slug: "yow-1", Name: "YOW-1", Country: "Canada", CountryCode: "CA", CloudProvider: &region.CloudProvider{Slug: "nimbo"}},
+	}}
 	resp := readRegionDS(t, lister, "nowhere")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error for missing slug, got none")
