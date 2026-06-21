@@ -366,14 +366,14 @@ func (r *vpnCustomerGatewayResource) Update(ctx context.Context, req resource.Up
 		ESPPolicy:          model.ESPPolicy.ValueString(),
 		IKELifetime:        model.IKELifetime.ValueString(),
 		ESPLifetime:        model.ESPLifetime.ValueString(),
-		IKEEncryption:      state.IKEEncryption.ValueString(),
-		IKEHash:            state.IKEHash.ValueString(),
-		IKEVersion:         state.IKEVersion.ValueString(),
-		IKEDH:              state.IKEDH.ValueString(),
-		ESPEncryption:      state.ESPEncryption.ValueString(),
-		ESPHash:            state.ESPHash.ValueString(),
-		ESPDH:              state.ESPDH.ValueString(),
-		ESPPFS:             state.ESPPFS.ValueString(),
+		IKEEncryption:      model.IKEEncryption.ValueString(),
+		IKEHash:            model.IKEHash.ValueString(),
+		IKEVersion:         state.IKEVersion.ValueString(), // RequiresReplace — never changes on update
+		IKEDH:              model.IKEDH.ValueString(),
+		ESPEncryption:      model.ESPEncryption.ValueString(),
+		ESPHash:            model.ESPHash.ValueString(),
+		ESPDH:              model.ESPDH.ValueString(),
+		ESPPFS:             model.ESPPFS.ValueString(),
 		ForceEncapsulation: model.ForceEncapsulation.ValueBool(),
 		SplitConnections:   model.SplitConnections.ValueBool(),
 		DeadPeerDetection:  model.DeadPeerDetection.ValueBool(),
@@ -386,19 +386,14 @@ func (r *vpnCustomerGatewayResource) Update(ctx context.Context, req resource.Up
 		return
 	}
 
-	// Merge: plan has the new mutable fields; preserve immutable and write-only from state.
+	// Merge: keep the plan's new mutable fields in model (including the write-only
+	// IKE/ESP algorithm fields just sent to the API); only preserve the immutable
+	// (RequiresReplace) and write-only-immutable fields from state.
 	model.ID = state.ID
 	model.Gateway = state.Gateway
 	model.CIDRList = state.CIDRList
 	model.IPSecPSK = state.IPSecPSK
-	model.IKEEncryption = state.IKEEncryption
-	model.IKEHash = state.IKEHash
 	model.IKEVersion = state.IKEVersion
-	model.IKEDH = state.IKEDH
-	model.ESPEncryption = state.ESPEncryption
-	model.ESPHash = state.ESPHash
-	model.ESPDH = state.ESPDH
-	model.ESPPFS = state.ESPPFS
 	model.CloudProvider = state.CloudProvider
 	model.Region = state.Region
 	model.Project = state.Project
@@ -425,7 +420,7 @@ func (r *vpnCustomerGatewayResource) Delete(ctx context.Context, req resource.De
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	err := r.svc.Delete(ctx, slug)
+	err := r.svc.Delete(deleteCtx, slug)
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete VPN customer gateway", err.Error())
 		return

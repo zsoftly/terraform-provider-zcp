@@ -204,7 +204,7 @@ func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	err := r.svc.Delete(ctx, slug)
+	err := r.svc.Delete(deleteCtx, slug)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete SSH key", err.Error())
 		return

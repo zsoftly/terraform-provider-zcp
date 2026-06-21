@@ -327,7 +327,7 @@ func (r *networkResource) Delete(ctx context.Context, req resource.DeleteRequest
 		project = model.Project.ValueString()
 	}
 	region := model.Region.ValueString()
-	err := r.svc.Delete(ctx, slug)
+	err := r.svc.Delete(deleteCtx, slug)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete network", err.Error())
 		return

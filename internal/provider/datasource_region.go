@@ -115,7 +115,7 @@ func (d *regionDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 			if r.CloudProvider != nil {
 				state.CloudProvider = types.StringValue(r.CloudProvider.Slug)
 			} else {
-				state.CloudProvider = types.StringValue("")
+				state.CloudProvider = types.StringNull()
 			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return

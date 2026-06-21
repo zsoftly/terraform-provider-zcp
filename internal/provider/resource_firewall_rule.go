@@ -233,7 +233,7 @@ func (r *firewallRuleResource) Delete(ctx context.Context, req resource.DeleteRe
 
 	ipSlug := model.IPAddress.ValueString()
 	ruleID := model.ID.ValueString()
-	err := r.svc.Delete(ctx, ipSlug, ruleID)
+	err := r.svc.Delete(deleteCtx, ipSlug, ruleID)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete firewall rule", err.Error())
 		return

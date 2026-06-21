@@ -16,3 +16,15 @@ variable "zcp_token" {
   type      = string
   sensitive = true
 }
+
+# Provide via TF_VAR_vpn_password / TF_VAR_ipsec_psk (or a gitignored *.tfvars) —
+# do not hardcode secrets in committed config.
+variable "vpn_password" {
+  type      = string
+  sensitive = true
+}
+
+variable "ipsec_psk" {
+  type      = string
+  sensitive = true
+}

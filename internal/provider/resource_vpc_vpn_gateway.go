@@ -188,7 +188,7 @@ func (r *vpcVPNGatewayResource) Delete(ctx context.Context, req resource.DeleteR
 
 	vpcSlug := model.VPC.ValueString()
 	gwID := model.ID.ValueString()
-	err := r.svc.DeleteVPNGateway(ctx, vpcSlug, gwID)
+	err := r.svc.DeleteVPNGateway(deleteCtx, vpcSlug, gwID)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete VPN gateway", err.Error())
 		return

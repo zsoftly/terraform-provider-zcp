@@ -225,7 +225,7 @@ func (r *portForwardResource) Delete(ctx context.Context, req resource.DeleteReq
 
 	ipSlug := model.IPAddress.ValueString()
 	ruleID := model.ID.ValueString()
-	err := r.svc.Delete(ctx, ipSlug, ruleID)
+	err := r.svc.Delete(deleteCtx, ipSlug, ruleID)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete port forwarding rule", err.Error())
 		return

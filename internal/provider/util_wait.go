@@ -24,10 +24,14 @@ func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx 
 		if !found {
 			return nil
 		}
+		t := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
 			return ctx.Err()
-		case <-time.After(interval):
+		case <-t.C:
 		}
 	}
 }

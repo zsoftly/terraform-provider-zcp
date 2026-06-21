@@ -38,7 +38,7 @@ resource "zcp_vpc" "yul_test" {
 
 resource "zcp_vpn_user" "yow_test" {
   username       = "tf2-test-vpn-user"
-  password       = "ChangeMe456"
+  password       = var.vpn_password
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
 }
@@ -49,7 +49,7 @@ resource "zcp_vpn_customer_gateway" "test" {
   name                = "tf2-test-cgw"
   gateway             = "203.0.113.2"
   cidr_list           = "192.168.200.0/24"
-  ipsec_psk           = "s3cr3t-psk2"
+  ipsec_psk           = var.ipsec_psk
   ike_policy          = "aes128-sha1-dh5"
   esp_policy          = "aes128-sha1"
   ike_lifetime        = "86400"

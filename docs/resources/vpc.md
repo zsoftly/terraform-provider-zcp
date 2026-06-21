@@ -24,8 +24,8 @@ resource "zcp_vpc" "main" {
   name           = "main-vpc"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  cidr           = "10.0.0.0/22"
-  size           = "small"
+  cidr           = "10.0.0.0"
+  size           = "24"
   description    = "Primary VPC"
 }
 ```

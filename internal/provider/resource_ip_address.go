@@ -222,7 +222,7 @@ func (r *ipAddressResource) Delete(ctx context.Context, req resource.DeleteReque
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	err := r.svc.Release(ctx, slug)
+	err := r.svc.Release(deleteCtx, slug)
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to release IP address", err.Error())
 		return

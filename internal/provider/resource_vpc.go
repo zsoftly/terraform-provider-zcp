@@ -311,7 +311,7 @@ func (r *vpcResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	err := r.svc.Delete(ctx, slug)
+	err := r.svc.Delete(deleteCtx, slug)
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete VPC", err.Error())
 		return
