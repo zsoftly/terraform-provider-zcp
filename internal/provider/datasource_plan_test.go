@@ -21,7 +21,7 @@ type fakePlanLister struct {
 	calledWith plan.ServiceType
 }
 
-func (f *fakePlanLister) List(_ context.Context, svc plan.ServiceType) ([]plan.Plan, error) {
+func (f *fakePlanLister) List(_ context.Context, svc plan.ServiceType, _ string) ([]plan.Plan, error) {
 	f.calledWith = svc
 	return f.plans, f.err
 }

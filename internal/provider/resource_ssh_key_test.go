@@ -40,6 +40,7 @@ type sshKeyStateModel struct {
 	ID        types.String   `tfsdk:"id"`
 	Name      types.String   `tfsdk:"name"`
 	PublicKey types.String   `tfsdk:"public_key"`
+	Region    types.String   `tfsdk:"region"`
 	Project   types.String   `tfsdk:"project"`
 	CreatedAt types.String   `tfsdk:"created_at"`
 	Timeouts  timeouts.Value `tfsdk:"timeouts"`
@@ -69,6 +70,7 @@ func createSSHKey(t *testing.T, svc *fakeSSHKeyService, name, pubKey string) res
 		"id":         tftypes.NewValue(tftypes.String, nil),
 		"name":       tftypes.NewValue(tftypes.String, name),
 		"public_key": tftypes.NewValue(tftypes.String, pubKey),
+		"region":     tftypes.NewValue(tftypes.String, nil),
 		"project":    tftypes.NewValue(tftypes.String, nil),
 		"created_at": tftypes.NewValue(tftypes.String, nil),
 		"timeouts":   timeoutsNull(t, schResp),
@@ -98,6 +100,7 @@ func readSSHKey(t *testing.T, svc *fakeSSHKeyService, slug string) resource.Read
 		"id":         tftypes.NewValue(tftypes.String, slug),
 		"name":       tftypes.NewValue(tftypes.String, "testkey"),
 		"public_key": tftypes.NewValue(tftypes.String, "ssh-rsa AAAA"),
+		"region":     tftypes.NewValue(tftypes.String, nil),
 		"project":    tftypes.NewValue(tftypes.String, nil),
 		"created_at": tftypes.NewValue(tftypes.String, "2024-01-01T00:00:00Z"),
 		"timeouts":   timeoutsNull(t, schResp),
@@ -122,6 +125,7 @@ func deleteSSHKey(t *testing.T, svc *fakeSSHKeyService, slug string) resource.De
 		"id":         tftypes.NewValue(tftypes.String, slug),
 		"name":       tftypes.NewValue(tftypes.String, "testkey"),
 		"public_key": tftypes.NewValue(tftypes.String, "ssh-rsa AAAA"),
+		"region":     tftypes.NewValue(tftypes.String, nil),
 		"project":    tftypes.NewValue(tftypes.String, nil),
 		"created_at": tftypes.NewValue(tftypes.String, "2024-01-01T00:00:00Z"),
 		"timeouts":   timeoutsNull(t, schResp),

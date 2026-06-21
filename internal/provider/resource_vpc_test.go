@@ -25,7 +25,7 @@ type fakeVPCService struct {
 	deleted []string
 }
 
-func (f *fakeVPCService) List(_ context.Context, _ string) ([]vpc.VPC, error) {
+func (f *fakeVPCService) List(_ context.Context, _, _, _ string) ([]vpc.VPC, error) {
 	return f.vpcs, f.err
 }
 func (f *fakeVPCService) Get(_ context.Context, slug string) (*vpc.VPC, error) {

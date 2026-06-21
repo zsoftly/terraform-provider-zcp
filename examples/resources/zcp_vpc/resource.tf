@@ -87,3 +87,9 @@ output "main_vpc_status" {
 output "env_vpc_ids" {
   value = { for k, v in zcp_vpc.env : k => v.id }
 }
+
+# ── Import ────────────────────────────────────────────────────────────────────
+# cidr, size and the other create-only attributes are not refreshed from the API,
+# so they are seeded via a composite import ID — see the resource docs. Example:
+#   terraform import zcp_vpc.main \
+#     'main-vpc/nimbo/yow-1/10.1.0.1/24//nvme/Vpc/hourly/virtual-private-cloud-vpc-1/'

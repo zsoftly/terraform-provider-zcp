@@ -2,11 +2,11 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -21,7 +21,7 @@ var _ resource.ResourceWithConfigure = &vpcResource{}
 var _ resource.ResourceWithImportState = &vpcResource{}
 
 type vpcServiceIface interface {
-	List(ctx context.Context, zoneSlug string) ([]vpc.VPC, error)
+	List(ctx context.Context, zoneSlug, region, project string) ([]vpc.VPC, error)
 	Get(ctx context.Context, slug string) (*vpc.VPC, error)
 	Create(ctx context.Context, req vpc.CreateRequest) (*vpc.VPC, error)
 	Update(ctx context.Context, slug string, req vpc.UpdateRequest) (*vpc.VPC, error)
@@ -198,11 +198,10 @@ func (r *vpcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	// no unknown values remain after apply. Status may be empty initially (VPC still
 	// provisioning) and populated after the next refresh.
 	model.Status = types.StringValue(v.Status)
-	// CIDR is a Required input field already set in model from the plan;
-	// only overwrite when the API returns a non-empty value.
-	if v.CIDR != "" {
-		model.CIDR = types.StringValue(v.CIDR)
-	}
+	// Do NOT overwrite cidr from the API response: the API echoes it back in
+	// prefixed form (e.g. "10.7.0.1/24") while this attribute is the base address
+	// the user supplied ("10.7.0.1"). Overwriting produces an inconsistent-result
+	// error and a perpetual diff. The plan value is authoritative.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -217,7 +216,11 @@ func (r *vpcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 		return
 	}
 
-	vpcs, err := r.svc.List(ctx, "")
+	project := r.defaultProject
+	if !model.Project.IsNull() && !model.Project.IsUnknown() {
+		project = model.Project.ValueString()
+	}
+	vpcs, err := r.svc.List(ctx, "", model.Region.ValueString(), project)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read VPC", err.Error())
 		return
@@ -235,9 +238,9 @@ func (r *vpcResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 			if v.Status != "" {
 				model.Status = types.StringValue(v.Status)
 			}
-			if v.CIDR != "" {
-				model.CIDR = types.StringValue(v.CIDR)
-			}
+			// cidr is intentionally NOT refreshed from the API: it returns the
+			// prefixed form ("10.7.0.1/24") whereas the attribute holds the base
+			// address the user set ("10.7.0.1"). Preserving state avoids a perpetual diff.
 			// cloud_provider, region, project, type, billing_cycle, plan, size are
 			// write-only (not in API response); preserved from state.
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
@@ -316,7 +319,10 @@ func (r *vpcResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
 		_, err := r.svc.Get(ctx, slug)
-		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		// vpc.Get returns the package sentinel vpc.ErrNotFound (not an *APIError)
+		// when the VPC is gone, so check it alongside the HTTP not-found helpers —
+		// otherwise a successful delete is reported as "deletion did not complete".
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) || errors.Is(err, vpc.ErrNotFound) {
 			return false, nil
 		}
 		return err == nil, err
@@ -325,6 +331,18 @@ func (r *vpcResource) Delete(ctx context.Context, req resource.DeleteRequest, re
 	}
 }
 
+// ImportState accepts a composite ID so the write-only / create-only attributes
+// the API never returns (and cidr, which it returns in a different prefixed form)
+// can be seeded for a zero-diff plan after import. Format (slash-separated,
+// trailing/empty segments allowed):
+//
+//	<slug>/<cloud_provider>/<region>/<cidr>/<size>/<project>/<storage_category>/<type>/<billing_cycle>/<plan>/<description>
+//
+// <slug>/<cloud_provider>/<region>/<cidr>/<size> are required (all RequiresReplace
+// and not refreshed from the API). <description> is last so a value containing "/"
+// survives. name and status come from the subsequent Read.
 func (r *vpcResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	fields := []string{"id", "cloud_provider", "region", "cidr", "size", "project", "storage_category", "type", "billing_cycle", "plan", "description"}
+	importPositional(ctx, req, resp, fields, 5,
+		"<slug>/<cloud_provider>/<region>/<cidr>/<size>[/<project>/<storage_category>/<type>/<billing_cycle>/<plan>/<description>]")
 }

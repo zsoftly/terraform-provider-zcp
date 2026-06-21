@@ -27,7 +27,7 @@ type fakeIPAddressService struct {
 func (f *fakeIPAddressService) Allocate(_ context.Context, _ ipaddress.CreateRequest) (*ipaddress.IPAddress, error) {
 	return f.allocated, f.err
 }
-func (f *fakeIPAddressService) List(_ context.Context, _ string) ([]ipaddress.IPAddress, error) {
+func (f *fakeIPAddressService) List(_ context.Context, _, _, _ string) ([]ipaddress.IPAddress, error) {
 	return f.ips, f.err
 }
 func (f *fakeIPAddressService) Release(_ context.Context, slug string) error {

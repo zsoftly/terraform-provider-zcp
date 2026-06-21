@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -21,7 +20,7 @@ var _ resource.ResourceWithConfigure = &networkResource{}
 var _ resource.ResourceWithImportState = &networkResource{}
 
 type networkServiceIface interface {
-	List(ctx context.Context) ([]network.Network, error)
+	List(ctx context.Context, region, project string) ([]network.Network, error)
 	Create(ctx context.Context, req network.CreateRequest) (*network.Network, error)
 	Update(ctx context.Context, slug string, req network.UpdateRequest) (*network.Network, error)
 	Delete(ctx context.Context, slug string) error
@@ -40,6 +39,7 @@ type networkResourceModel struct {
 	Project       types.String `tfsdk:"project"`
 	Description   types.String `tfsdk:"description"`
 	CategorySlug  types.String `tfsdk:"category_slug"`
+	NetworkPlan   types.String `tfsdk:"network_plan"`
 	VPC           types.String `tfsdk:"vpc"`
 	BillingCycle  types.String `tfsdk:"billing_cycle"`
 	// Computed
@@ -51,6 +51,22 @@ type networkResourceModel struct {
 
 func NewNetworkResource() resource.Resource {
 	return &networkResource{}
+}
+
+// apiOrKeep returns the API value when non-empty; otherwise it keeps the current
+// (plan/state) value, falling back to "" only when that value is unknown/null so
+// no unknown remains after apply. The network API echoes gateway/netmask
+// inconsistently — populated for isolated networks but empty on the VPC-subnet
+// create response, where the user supplied them — so blindly taking the API
+// value would clobber user input and produce an inconsistent-result error.
+func apiOrKeep(current types.String, apiVal string) types.String {
+	if apiVal != "" {
+		return types.StringValue(apiVal)
+	}
+	if current.IsUnknown() || current.IsNull() {
+		return types.StringValue("")
+	}
+	return current
 }
 
 func (r *networkResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -93,6 +109,11 @@ func (r *networkResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 			"category_slug": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Network category slug. Not returned by the API after creation; changes force replacement.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"network_plan": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Network plan slug (e.g. `inet-yow`). Required by the API for standalone isolated networks; omit for VPC subnets (which use `billing_cycle`). See `data.zcp_plan` with `service = \"network\"`. Changes force replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"vpc": schema.StringAttribute{
@@ -183,6 +204,7 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 		Project:       project,
 		Description:   model.Description.ValueString(),
 		CategorySlug:  model.CategorySlug.ValueString(),
+		NetworkPlan:   model.NetworkPlan.ValueString(),
 		VPC:           vpc,
 		BillingCycle:  model.BillingCycle.ValueString(),
 		Gateway:       model.Gateway.ValueString(),
@@ -195,9 +217,9 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	}
 
 	model.ID = types.StringValue(net.Slug)
-	model.Gateway = types.StringValue(net.Gateway)
-	model.CIDR = types.StringValue(net.CIDR)
-	model.Netmask = types.StringValue(net.Netmask)
+	model.CIDR = apiOrKeep(model.CIDR, net.CIDR)
+	model.Gateway = apiOrKeep(model.Gateway, net.Gateway)
+	model.Netmask = apiOrKeep(model.Netmask, net.Netmask)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -212,7 +234,11 @@ func (r *networkResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	networks, err := r.svc.List(ctx)
+	project := r.defaultProject
+	if !model.Project.IsNull() && !model.Project.IsUnknown() {
+		project = model.Project.ValueString()
+	}
+	networks, err := r.svc.List(ctx, model.Region.ValueString(), project)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read network", err.Error())
 		return
@@ -222,10 +248,10 @@ func (r *networkResource) Read(ctx context.Context, req resource.ReadRequest, re
 	for _, n := range networks {
 		if n.Slug == slug {
 			model.Name = types.StringValue(n.Name)
-			model.Description = types.StringValue(n.Description)
-			model.Gateway = types.StringValue(n.Gateway)
-			model.CIDR = types.StringValue(n.CIDR)
-			model.Netmask = types.StringValue(n.Netmask)
+			model.Description = apiOrKeep(model.Description, n.Description)
+			model.Gateway = apiOrKeep(model.Gateway, n.Gateway)
+			model.CIDR = apiOrKeep(model.CIDR, n.CIDR)
+			model.Netmask = apiOrKeep(model.Netmask, n.Netmask)
 			if n.VPC != "" {
 				model.VPC = types.StringValue(n.VPC)
 			}
@@ -296,6 +322,11 @@ func (r *networkResource) Delete(ctx context.Context, req resource.DeleteRequest
 	defer cancel()
 
 	slug := model.ID.ValueString()
+	project := r.defaultProject
+	if !model.Project.IsNull() && !model.Project.IsUnknown() {
+		project = model.Project.ValueString()
+	}
+	region := model.Region.ValueString()
 	err := r.svc.Delete(ctx, slug)
 	if err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete network", err.Error())
@@ -303,7 +334,7 @@ func (r *networkResource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
-		networks, err := r.svc.List(ctx)
+		networks, err := r.svc.List(ctx, region, project)
 		if apierrors.IsNotFound(err) {
 			return false, nil
 		}
@@ -321,6 +352,17 @@ func (r *networkResource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 }
 
+// ImportState accepts a composite ID so the write-only / create-only attributes
+// the API never returns can be seeded into state, giving a zero-diff plan after
+// import. Format (slash-separated, trailing/empty segments allowed):
+//
+//	<slug>/<cloud_provider>/<region>/<project>/<network_plan>/<billing_cycle>/<gateway>/<netmask>/<vpc>/<description>
+//
+// Only <slug>/<cloud_provider>/<region> are required; omit or leave empty any the
+// resource's config does not set. <description> is last so a value containing "/"
+// survives. name and cidr are populated by the subsequent Read.
 func (r *networkResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	fields := []string{"id", "cloud_provider", "region", "project", "network_plan", "billing_cycle", "gateway", "netmask", "vpc", "description"}
+	importPositional(ctx, req, resp, fields, 3,
+		"<slug>/<cloud_provider>/<region>[/<project>/<network_plan>/<billing_cycle>/<gateway>/<netmask>/<vpc>/<description>]")
 }

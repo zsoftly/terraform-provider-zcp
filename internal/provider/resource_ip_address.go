@@ -22,7 +22,7 @@ var _ resource.ResourceWithImportState = &ipAddressResource{}
 
 type ipAddressServiceIface interface {
 	Allocate(ctx context.Context, req ipaddress.CreateRequest) (*ipaddress.IPAddress, error)
-	List(ctx context.Context, vpcSlug string) ([]ipaddress.IPAddress, error)
+	List(ctx context.Context, vpcSlug, region, project string) ([]ipaddress.IPAddress, error)
 	Release(ctx context.Context, slug string) error
 }
 
@@ -175,7 +175,7 @@ func (r *ipAddressResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	ips, err := r.svc.List(ctx, "")
+	ips, err := r.svc.List(ctx, "", "", "")
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read IP address", err.Error())
 		return
@@ -229,7 +229,7 @@ func (r *ipAddressResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
-		ips, err := r.svc.List(ctx, "")
+		ips, err := r.svc.List(ctx, "", "", "")
 		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
 		}

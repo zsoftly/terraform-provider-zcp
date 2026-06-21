@@ -6,7 +6,6 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
-	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -35,6 +34,7 @@ type sshKeyResourceModel struct {
 	ID        types.String   `tfsdk:"id"`
 	Name      types.String   `tfsdk:"name"`
 	PublicKey types.String   `tfsdk:"public_key"`
+	Region    types.String   `tfsdk:"region"`
 	Project   types.String   `tfsdk:"project"`
 	CreatedAt types.String   `tfsdk:"created_at"`
 	Timeouts  timeouts.Value `tfsdk:"timeouts"`
@@ -66,6 +66,11 @@ func (r *sshKeyResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				Required:            true,
 				Sensitive:           true,
 				MarkdownDescription: "OpenSSH public key material.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+			},
+			"region": schema.StringAttribute{
+				Required:            true,
+				MarkdownDescription: "Region slug (e.g. `yow-1`). Required by the API to derive the cloud provider; changing it forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"project": schema.StringAttribute{
@@ -128,6 +133,7 @@ func (r *sshKeyResource) Create(ctx context.Context, req resource.CreateRequest,
 	key, err := r.svc.Create(ctx, sshkey.CreateRequest{
 		Name:      model.Name.ValueString(),
 		PublicKey: model.PublicKey.ValueString(),
+		Region:    model.Region.ValueString(),
 		Project:   project,
 	})
 	if err != nil {
@@ -223,6 +229,15 @@ func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	}
 }
 
+// ImportState accepts a composite ID so the write-only region/project (which the
+// API does not return) are seeded for a zero-diff plan after import. Format:
+//
+//	<slug>/<region>[/<project>]
+//
+// Omit <project> (or leave it empty: "<slug>/<region>/") when the config relies
+// on the provider's default_project. name, public_key, and created_at are
+// populated by the subsequent Read.
 func (r *sshKeyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
+	fields := []string{"id", "region", "project"}
+	importPositional(ctx, req, resp, fields, 2, "<slug>/<region>[/<project>]")
 }
