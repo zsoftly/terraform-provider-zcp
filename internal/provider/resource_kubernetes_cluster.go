@@ -112,7 +112,7 @@ func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.Schem
 			},
 			"storage_category": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Storage category slug (e.g. `pro-nvme`, `nvme`, `ssd`). Changing this forces replacement.",
+				MarkdownDescription: "Storage category slug. Region-specific: `nvme` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"project": schema.StringAttribute{
@@ -375,15 +375,20 @@ func (r *kubernetesClusterResource) Read(ctx context.Context, req resource.ReadR
 	r.applyClusterState(&model, c)
 	// Reconcile the node-count/ha attributes from the API, but only trust a sane
 	// (>0) count — the API briefly reports 0 right after create/scale, and
-	// writing that would force a spurious replace/diff. `ha` is a stored field
-	// and reliable to refresh directly.
+	// writing that would force a spurious replace/diff.
 	if w := clusterWorkers(c); w > 0 {
 		model.Workers = types.Int64Value(w)
 	}
 	if c.ControlNodes > 0 {
 		model.ControlNodes = types.Int64Value(int64(c.ControlNodes))
 	}
-	model.HA = types.BoolValue(c.EnableHA)
+	// ha is create-only (RequiresReplace). The API may report it differently from
+	// the submitted value (e.g. HA implicitly enabled for control_nodes >= 3),
+	// which would otherwise produce a perpetual forced-replace diff, so preserve
+	// the configured value and only adopt the API value when state has none (import).
+	if model.HA.IsNull() || model.HA.IsUnknown() {
+		model.HA = types.BoolValue(c.EnableHA)
+	}
 	// version, plan, billing_cycle, storage_category, cloud_provider, project and
 	// ssh_key are create-only; preserved from state to avoid format-driven diffs.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)

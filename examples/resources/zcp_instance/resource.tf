@@ -25,7 +25,7 @@ resource "zcp_instance" "web" {
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   template         = "ubuntu-2404-lts"
-  plan             = "ca1hxs"
+  plan             = "ci1xs"
   billing_cycle    = "hourly"
   network_plan     = "pnet-yow"
   storage_category = "nvme"
@@ -40,7 +40,7 @@ resource "zcp_instance" "app" {
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   template         = "ubuntu-2404-lts"
-  plan             = "ci1hm"
+  plan             = "ci1m"
   billing_cycle    = "hourly"
   network_plan     = "pnet-yow"
   storage_category = "nvme"
@@ -74,4 +74,4 @@ output "web_public_ip" {
 # Create-only attributes the API does not echo back are supplied positionally:
 # terraform import zcp_instance.web \
 #   '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>]'
-#   e.g. terraform import zcp_instance.web 'web-01-abc/nimbo/yow-1/ubuntu-24-04'
+#   e.g. terraform import zcp_instance.web 'web-01-abc/nimbo/yow-1/ubuntu-2404-lts'

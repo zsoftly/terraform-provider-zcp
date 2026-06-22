@@ -44,7 +44,7 @@ After import, `cloud_provider`, `region`, `project`, and `category_slug` will be
 ### Required
 
 - `name` (String) Display name for the network.
-- `cloud_provider` (String) Cloud provider slug (e.g. `cloudstack`). Changing this forces replacement.
+- `cloud_provider` (String) Cloud provider slug (e.g. `nimbo`). Changing this forces replacement.
 - `region` (String) Region slug where the network is created. Changing this forces replacement.
 
 ### Optional

@@ -21,7 +21,7 @@ resource "zcp_kubernetes_cluster" "main" {
   plan             = "k8s-li-yow-1"
   billing_cycle    = "hourly"
   workers          = 3
-  storage_category = "pro-nvme"
+  storage_category = "nvme"
   ssh_key          = zcp_ssh_key.k8s.name
 }
 
@@ -36,7 +36,7 @@ resource "zcp_kubernetes_cluster" "ha" {
   workers          = 3
   control_nodes    = 3
   ha               = true
-  storage_category = "pro-nvme"
+  storage_category = "nvme"
   ssh_key          = zcp_ssh_key.k8s.name
 }
 
@@ -55,4 +55,4 @@ output "cluster_ip" {
 # terraform import zcp_kubernetes_cluster.main \
 #   '<slug>/<cloud_provider>/<region>/<version>/<plan>/<billing_cycle>/<storage_category>[/<project>/<ssh_key>]'
 #   e.g. terraform import zcp_kubernetes_cluster.main \
-#     'main-cluster-abc/nimbo/yow-1/v1.36.1/k8s-li-yow-1/hourly/pro-nvme'
+#     'main-cluster-abc/nimbo/yow-1/v1.36.1/k8s-li-yow-1/hourly/nvme'

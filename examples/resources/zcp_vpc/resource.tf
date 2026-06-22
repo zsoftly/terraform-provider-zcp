@@ -9,7 +9,7 @@ data "zcp_project" "default" {
 # ── Example 1: minimal VPC ────────────────────────────────────────────────────
 # cidr is the base network address (no prefix notation); size is the prefix length.
 # Run `zcp plan router` to list available VPC plans.
-# Available plans: virtual-private-cloud-vpc-1 (5 Gbps), virtual-private-cloud-vpc (50 Mbps)
+# VPC plans are region-specific: virtual-private-cloud-vpc (YOW, 50 Mbps), virtual-private-cloud-vpc-1 (YUL, 5 Gbps).
 resource "zcp_vpc" "main" {
   name             = "main-vpc"
   cloud_provider   = data.zcp_region.yow.cloud_provider
@@ -19,7 +19,7 @@ resource "zcp_vpc" "main" {
   type             = "Vpc"
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  plan             = "virtual-private-cloud-vpc-1"
+  plan             = "virtual-private-cloud-vpc"
 }
 
 # ── Example 2: VPC with description ──────────────────────────────────────────
@@ -32,7 +32,7 @@ resource "zcp_vpc" "prod" {
   type             = "Vpc"
   billing_cycle    = "monthly"
   storage_category = "nvme"
-  plan             = "virtual-private-cloud-vpc-1"
+  plan             = "virtual-private-cloud-vpc"
   description      = "Production VPC"
 }
 
@@ -46,7 +46,7 @@ resource "zcp_vpc" "staging" {
   type             = "Vpc"
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  plan             = "virtual-private-cloud-vpc-1"
+  plan             = "virtual-private-cloud-vpc"
   project          = data.zcp_project.default.slug
   description      = "Staging VPC"
 }
@@ -70,7 +70,7 @@ resource "zcp_vpc" "env" {
   type             = "Vpc"
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  plan             = "virtual-private-cloud-vpc-1"
+  plan             = "virtual-private-cloud-vpc"
   description      = each.value.description
 }
 
@@ -92,4 +92,4 @@ output "env_vpc_ids" {
 # cidr, size and the other create-only attributes are not refreshed from the API,
 # so they are seeded via a composite import ID — see the resource docs. Example:
 #   terraform import zcp_vpc.main \
-#     'main-vpc/nimbo/yow-1/10.1.0.1/24//nvme/Vpc/hourly/virtual-private-cloud-vpc-1/'
+#     'main-vpc/nimbo/yow-1/10.1.0.1/24//nvme/Vpc/hourly/virtual-private-cloud-vpc/'

@@ -104,7 +104,7 @@ func (r *volumeResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			},
 			"storage_category": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Storage category slug (e.g. `nvme`, `pro-nvme`). Changing this forces replacement.",
+				MarkdownDescription: "Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"plan": schema.StringAttribute{

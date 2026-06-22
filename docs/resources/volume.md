@@ -61,7 +61,7 @@ terraform import zcp_volume.data '<slug>/<cloud_provider>/<region>/<billing_cycl
 - `cloud_provider` (String) Cloud provider slug. Use `data.zcp_region.<name>.cloud_provider`. Changing this forces replacement.
 - `region` (String) Region slug (e.g. `yow-1`). Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Changing this forces replacement.
-- `storage_category` (String) Storage category slug (e.g. `nvme`, `pro-nvme`). Changing this forces replacement.
+- `storage_category` (String) Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Changing this forces replacement.
 
 ### Optional
 

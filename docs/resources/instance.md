@@ -15,7 +15,7 @@ The resource maps the CLI's instance operations to Terraform's declarative model
 
 **Power state is not managed by Terraform.** The provider reports the instance's runtime state (running/stopped) read-only in `state`. Running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize**. Changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, like changing an `aws_instance` `instance_type`. `tags` are optional.
 
-~> **Hostname is set once at creation** (from `name`) and is not changed afterward. Only the display `name` is mutable. This matches CloudStack/EC2 behaviour.
+~> **Hostname is set once at creation** (from `name`) and is not changed afterward. Only the display `name` is mutable. This matches how instance hostnames behave on EC2 and most clouds.
 
 Imperative, non-declarative CLI operations (`reboot`/`reset`, `change-password`, `ssh`, `logs`, and `addons`) are not modeled as resource attributes. Use the `zcp` CLI for those.
 
@@ -35,7 +35,7 @@ resource "zcp_instance" "web" {
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   template         = "ubuntu-2404-lts"
-  plan             = "ca1hxs"
+  plan             = "ci1xs"
   billing_cycle    = "hourly"
   network_plan     = "pnet-yow"
   storage_category = "nvme"
@@ -69,7 +69,7 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 - `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
 - `ssh_key` (String) Name of an existing SSH key to attach for login (see `zcp_ssh_key`). Changing this forces replacement.
 - `network_plan` (String) Network plan slug (e.g. `pnet-yow`). Required by the public API. Run `zcp plan network` to list values. Changing this forces replacement.
-- `storage_category` (String) Storage category slug (e.g. `nvme`, `pro-nvme`). Required by the public API. Changing this forces replacement.
+- `storage_category` (String) Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Required by the public API. Changing this forces replacement.
 - `user_data` (String) Startup script content (cloud-init / bash). Updated in place via change-startup-script (takes effect on next boot).
 - `tags` (Map of String) Key/value tags applied via tag-create / tag-delete. **Write-only:** the API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.
 - `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 20m.

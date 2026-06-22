@@ -45,7 +45,7 @@ After import, write-only fields (`cloud_provider`, `region`, `project`, `size`, 
 ### Required
 
 - `name` (String) Display name for the VPC.
-- `cloud_provider` (String) Cloud provider slug (e.g. `cloudstack`). Changing this forces replacement.
+- `cloud_provider` (String) Cloud provider slug (e.g. `nimbo`). Changing this forces replacement.
 - `region` (String) Region slug where the VPC is created. Changing this forces replacement.
 - `cidr` (String) Network address for the VPC (e.g. `10.1.0.1`). This is the base IP address. Do not include the prefix length. Changing this forces replacement.
 - `size` (String) Subnet mask prefix length as a string (e.g. `"24"` for /24, `"16"` for /16). Changing this forces replacement.
@@ -56,7 +56,7 @@ After import, write-only fields (`cloud_provider`, `region`, `project`, `size`, 
 - `description` (String) Human-readable description.
 - `type` (String) VPC type (e.g. `Vpc`). Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Changing this forces replacement.
-- `plan` (String) Plan slug for VPC compute resources. Run `zcp plan router` to list available plans (e.g. `virtual-private-cloud-vpc-1` for 5 Gbps, `virtual-private-cloud-vpc` for 50 Mbps). Changing this forces replacement.
+- `plan` (String) Plan slug for VPC compute resources. Region-specific: `virtual-private-cloud-vpc` (yow-1, 50 Mbps), `virtual-private-cloud-vpc-1` (yul-1, 5 Gbps). Run `zcp plan router --region <region>` to list available plans. Changing this forces replacement.
 - `storage_category` (String) Storage category slug. Run `zcp storage-category list` to list available values (e.g. `nvme`, `pro-nvme`, `premium-ssd`). Changing this forces replacement.
 
 ### Read-Only

@@ -29,7 +29,7 @@ resource "zcp_kubernetes_cluster" "main" {
   plan             = "k8s-li-yow-1"
   billing_cycle    = "hourly"
   workers          = 3
-  storage_category = "pro-nvme"
+  storage_category = "nvme"
   ssh_key          = "k8s-key"
 }
 ```
@@ -53,7 +53,7 @@ terraform import zcp_kubernetes_cluster.main '<slug>/<cloud_provider>/<region>/<
 - `plan` (String) Cluster node plan slug (e.g. `k8s-li-yow-1`). Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Changing this forces replacement.
 - `workers` (Number) Number of worker nodes (>= 1). Changing this scales the cluster in place.
-- `storage_category` (String) Storage category slug (e.g. `pro-nvme`, `nvme`, `ssd`). Changing this forces replacement.
+- `storage_category` (String) Storage category slug. Region-specific: `nvme` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Changing this forces replacement.
 
 ### Optional
 

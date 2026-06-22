@@ -114,7 +114,7 @@ func readNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.Re
 	stateVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, slug),
 		"name":           tftypes.NewValue(tftypes.String, "testnet"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, nil),
@@ -141,7 +141,7 @@ func deleteNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.
 	stateVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, slug),
 		"name":           tftypes.NewValue(tftypes.String, "testnet"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, nil),
@@ -170,7 +170,7 @@ func TestNetworkResource_createHappyPath(t *testing.T) {
 			Netmask: "255.255.255.0",
 		},
 	}
-	resp := createNetwork(t, svc, "testnet", "yow", "cloudstack")
+	resp := createNetwork(t, svc, "testnet", "yow", "nimbo")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
@@ -191,7 +191,7 @@ func TestNetworkResource_createHappyPath(t *testing.T) {
 
 func TestNetworkResource_createServiceError(t *testing.T) {
 	svc := &fakeNetworkService{err: errors.New("quota exceeded")}
-	resp := createNetwork(t, svc, "testnet", "yow", "cloudstack")
+	resp := createNetwork(t, svc, "testnet", "yow", "nimbo")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure, got none")
 	}
@@ -271,7 +271,7 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 	existingState := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, "testnet-abc123"),
 		"name":           tftypes.NewValue(tftypes.String, "old-name"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "old-desc"),
@@ -287,7 +287,7 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 	newPlan := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, "testnet-abc123"),
 		"name":           tftypes.NewValue(tftypes.String, "new-name"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "new-desc"),
@@ -340,7 +340,7 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 	existingState := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, "testnet-abc123"),
 		"name":           tftypes.NewValue(tftypes.String, "same-name"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, "old-desc"),
@@ -357,7 +357,7 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 	emptyDescPlan := tftypes.NewValue(tfType, map[string]tftypes.Value{
 		"id":             tftypes.NewValue(tftypes.String, "testnet-abc123"),
 		"name":           tftypes.NewValue(tftypes.String, "same-name"),
-		"cloud_provider": tftypes.NewValue(tftypes.String, "cloudstack"),
+		"cloud_provider": tftypes.NewValue(tftypes.String, "nimbo"),
 		"region":         tftypes.NewValue(tftypes.String, "yow"),
 		"project":        tftypes.NewValue(tftypes.String, nil),
 		"description":    tftypes.NewValue(tftypes.String, ""),

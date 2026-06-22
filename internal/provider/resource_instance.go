@@ -146,7 +146,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"storage_category": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Storage category slug (e.g. `nvme`, `pro-nvme`). Required by the public API. Changing this forces replacement.",
+				MarkdownDescription: "Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Required by the public API. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"user_data": schema.StringAttribute{
@@ -275,10 +275,11 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	slug := vm.Slug
 
-	// Block until Running so both IPs are populated (mirrors the CLI --wait).
-	// If any post-create step fails the VM is already provisioned but will not be
-	// saved to state, so clean it up to avoid leaving an unmanaged orphan.
-	ready, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0)
+	// Block until Running so both IPs are populated (mirrors the CLI --wait). This
+	// fails fast on a terminal provisioning state instead of blocking for the full
+	// create timeout. If the VM never becomes usable it is already provisioned but
+	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
+	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
 		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
 		resp.Diagnostics.AddError(
@@ -288,18 +289,22 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		return
 	}
 
-	// Apply tags requested at create time.
-	tags, tdiags := mapToStringMap(ctx, model.Tags)
-	resp.Diagnostics.Append(tdiags...)
-	if resp.Diagnostics.HasError() {
-		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
-		return
-	}
-	for k, v := range tags {
-		if _, err := r.svc.CreateTag(ctx, slug, instance.TagRequest{Key: k, Value: v}); err != nil {
-			r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
-			resp.Diagnostics.AddError("Failed to apply instance tag", fmt.Sprintf("tag %q: %s", k, err.Error()))
-			return
+	// Apply tags requested at create time. A tag failure does NOT roll back a
+	// healthy, Running instance: expunging working compute over a non-essential,
+	// write-only attribute is worse than a missing tag. Failures are surfaced as
+	// warnings and the instance is kept and saved to state.
+	if tags, tdiags := mapToStringMap(ctx, model.Tags); tdiags.HasError() {
+		for _, d := range tdiags {
+			resp.Diagnostics.AddWarning("Instance tags not applied", d.Detail())
+		}
+	} else {
+		for k, v := range tags {
+			if _, err := r.svc.CreateTag(ctx, slug, instance.TagRequest{Key: k, Value: v}); err != nil {
+				resp.Diagnostics.AddWarning(
+					"Instance tag not applied",
+					fmt.Sprintf("tag %q on instance %s failed: %s. The instance was created; re-apply to set the tag.", k, slug, err.Error()),
+				)
+			}
 		}
 	}
 
@@ -337,6 +342,13 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
+// Update applies the in-place changes in sequence (rename, startup script,
+// resize, tags). Each step is idempotent. If a later step fails, the method
+// returns without saving state, so the prior state is retained and Terraform
+// re-runs the update on the next apply; the already-applied steps (e.g. a rename)
+// simply re-run as no-ops. This is deliberate: persisting the plan on a partial
+// failure could record a not-yet-applied step (e.g. a failed resize) as done and
+// mask the drift.
 func (r *instanceResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var plan instanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -410,6 +422,34 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	}
 	r.applyVMState(&plan, vm)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+// waitForRunning polls the instance until it reports Running (returning it) or a
+// terminal provisioning state. Polling on the instance state, rather than
+// delegating to the CLI's WaitForState (which only matches the target state),
+// lets a failed provision error out in seconds instead of blocking for the full
+// create timeout.
+func (r *instanceResource) waitForRunning(ctx context.Context, slug string) (*instance.VirtualMachine, error) {
+	var latest *instance.VirtualMachine
+	err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+		vm, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		latest = vm
+		switch strings.ToLower(vm.State) {
+		case "running":
+			return true, nil
+		case "error", "failed", "destroyed", "expunging", "expunged":
+			return false, fmt.Errorf("instance entered state %q", vm.State)
+		default:
+			return false, nil
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return latest, nil
 }
 
 // cleanupAfterFailedCreate best-effort deletes an instance that was provisioned

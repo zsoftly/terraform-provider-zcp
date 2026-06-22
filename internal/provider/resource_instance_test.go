@@ -179,9 +179,11 @@ func createInstance(t *testing.T, svc *fakeInstanceService) resource.CreateRespo
 
 func TestInstanceResource_createWaitsForRunning(t *testing.T) {
 	pubIP := "203.0.113.5"
+	// Create polls via Get; return a Running VM on the first poll so it settles
+	// immediately (no interval sleep) and IPs are populated.
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
-		waited: &instance.VirtualMachine{
+		got: &instance.VirtualMachine{
 			Slug:     "vm1-abc",
 			State:    "Running",
 			PublicIP: &pubIP,
@@ -212,14 +214,16 @@ func TestInstanceResource_createWaitsForRunning(t *testing.T) {
 	}
 }
 
-func TestInstanceResource_createWaitError(t *testing.T) {
+func TestInstanceResource_createFailsFastOnTerminalState(t *testing.T) {
+	// A terminal provisioning state errors immediately instead of blocking for the
+	// full create timeout.
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
-		waitErr: errors.New("timed out"),
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Error"},
 	}
 	resp := createInstance(t, svc)
 	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected error when wait fails")
+		t.Fatal("expected error when instance enters a terminal state")
 	}
 }
 
@@ -359,11 +363,11 @@ func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
 func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
-		waitErr: errors.New("timed out"),
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Failed"},
 	}
 	resp := createInstance(t, svc)
 	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected error when wait fails")
+		t.Fatal("expected error when instance fails to provision")
 	}
 	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
 		t.Errorf("cleanup Delete called with %v, want [vm1-abc]", svc.deleted)
