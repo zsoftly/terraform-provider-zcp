@@ -10,7 +10,7 @@ Manages a ZCP managed Kubernetes cluster. Create **blocks until the cluster reac
 
 Changing `workers` scales the cluster **in place** (an update, not a replacement) and blocks until scaling completes. Changing `version` or `region` forces a new cluster.
 
-`name`, `cloud_provider`, `region`, `version`, `plan`, `billing_cycle`, `storage_category`, `project`, `ssh_key`, `control_nodes`, and `ha` are immutable — changing any of them forces replacement.
+`name`, `cloud_provider`, `region`, `version`, `plan`, `billing_cycle`, `storage_category`, `project`, `ssh_key`, `control_nodes`, and `ha` are immutable. Changing any of them forces replacement.
 
 ~> **Note on write-only fields:** the create-only inputs above are sent to the API on creation but are preserved from state on refresh to avoid format-driven diffs.
 
@@ -59,7 +59,7 @@ terraform import zcp_kubernetes_cluster.main '<slug>/<cloud_provider>/<region>/<
 
 - `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
 - `ssh_key` (String) Name of an existing SSH key for node login (see `zcp_ssh_key`). Changing this forces replacement.
-- `control_nodes` (Number) Number of control-plane nodes (default 1; use >= 3 for HA). Changing this forces replacement.
+- `control_nodes` (Number) Number of control-plane nodes (default 1, use >= 3 for HA). Changing this forces replacement.
 - `ha` (Boolean) Enable high availability. Changing this forces replacement.
 - `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 45m.
 

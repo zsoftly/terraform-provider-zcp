@@ -6,11 +6,11 @@ description: |-
 
 # zcp_volume
 
-Manages a ZCP block storage volume. Provide **exactly one** of `plan` (a fixed offering) or `size` (a custom size in GB) — setting both, or neither, is a plan-time error.
+Manages a ZCP block storage volume. Provide **exactly one** of `plan` (a fixed offering) or `size` (a custom size in GB). Setting both, or neither, is a plan-time error.
 
-Set `vm` to attach the volume to an instance on creation. Changing `vm` later attaches/detaches the volume in place; clearing it detaches. On destroy, an attached volume is detached automatically before deletion.
+Set `vm` to attach the volume to an instance on creation. Changing `vm` later attaches or detaches the volume in place. Clearing it detaches. On destroy, the provider detaches an attached volume automatically before deletion.
 
-`name`, `cloud_provider`, `region`, `billing_cycle`, `storage_category`, `plan`, `size`, and `project` are immutable — changing any of them forces replacement. Only `vm` is updatable in place.
+`name`, `cloud_provider`, `region`, `billing_cycle`, `storage_category`, `plan`, `size`, and `project` are immutable. Changing any of them forces replacement. Only `vm` is updatable in place.
 
 ~> **Note on write-only fields:** the create-only inputs above are sent to the API on creation but are not all returned in a comparable form by the list response. They are preserved in Terraform state.
 
@@ -51,7 +51,7 @@ resource "zcp_volume" "db_data" {
 terraform import zcp_volume.data '<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>[/<plan>/<project>/<vm>]'
 ```
 
-`<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>` are required. `size` cannot be imported via the ID (it is numeric) — set it in configuration for size-based volumes. `name` and `slug` come from the subsequent read.
+`<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>` are required. `size` cannot be imported via the ID (it is numeric). Set it in configuration for size-based volumes. `name` and `slug` come from the subsequent read.
 
 ## Schema
 

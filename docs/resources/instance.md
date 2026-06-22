@@ -6,18 +6,18 @@ description: |-
 
 # zcp_instance
 
-Manages a ZCP virtual machine instance. Create **blocks until the instance reaches the `Running` state** (mirroring the CLI's `--wait`), so `private_ip` and `public_ip` are populated in state once the resource finishes applying.
+Manages a ZCP virtual machine instance. Create **blocks until the instance reaches the `Running` state** (mirroring the CLI's `--wait`). `private_ip` and `public_ip` are populated in state once the resource finishes applying.
 
 The resource maps the CLI's instance operations to Terraform's declarative model:
 
 - **In-place updates:** `name` (display name), `plan` + `billing_cycle` (resize), `user_data` (change-startup-script), and `tags` (tag-create / tag-delete).
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template change reprovisions the disk), and the other create-only inputs (`project`, `ssh_key`, `network_plan`, `storage_category`).
 
-**Power state is not managed by Terraform.** The instance's runtime state (running/stopped) is reported read-only in `state`; running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize** — changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, exactly like changing an `aws_instance` `instance_type`. `tags` are optional.
+**Power state is not managed by Terraform.** The provider reports the instance's runtime state (running/stopped) read-only in `state`. Running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize**. Changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, like changing an `aws_instance` `instance_type`. `tags` are optional.
 
-~> **Hostname is set once at creation** (from `name`) and is not changed afterward — only the display `name` is mutable. This matches CloudStack/EC2 behaviour.
+~> **Hostname is set once at creation** (from `name`) and is not changed afterward. Only the display `name` is mutable. This matches CloudStack/EC2 behaviour.
 
-Imperative, non-declarative CLI operations — `reboot`/`reset`, `change-password`, `ssh`, `logs`, and `addons` — are intentionally not modeled as resource attributes; use the `zcp` CLI for those.
+Imperative, non-declarative CLI operations (`reboot`/`reset`, `change-password`, `ssh`, `logs`, and `addons`) are not modeled as resource attributes. Use the `zcp` CLI for those.
 
 ~> **Note on write-only fields:** the create-only inputs are sent to the API on creation but are not all echoed back in a comparable form on refresh. They are preserved in Terraform state.
 
@@ -78,6 +78,6 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 
 - `id` (String) Instance slug (unique identifier).
 - `slug` (String) Instance slug (same value as `id`).
-- `state` (String) Current runtime state of the instance (e.g. `Running`, `Stopped`), reported for information only — Terraform does not reconcile or manage power state.
+- `state` (String) Current runtime state of the instance (e.g. `Running`, `Stopped`), reported for information only. Terraform does not reconcile or manage power state.
 - `private_ip` (String) Private IP of the instance's default network.
 - `public_ip` (String) Public IP of the instance, if assigned.
