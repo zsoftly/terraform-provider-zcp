@@ -12,7 +12,7 @@ Look up a ZCP region by slug and expose its attributes as read-only values. Use 
 
 ```terraform
 # Compute regions: "yow-1" (Ottawa) and "yul-1" (Montreal).
-# cloud_provider resolves to "nimbo" for both — always read it from the
+# cloud_provider resolves to "nimbo" for both. Always read it from the
 # data source rather than hardcoding.
 data "zcp_region" "yow" {
   slug = "yow-1"

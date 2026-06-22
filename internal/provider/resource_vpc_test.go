@@ -180,7 +180,7 @@ func TestVPCResource_createHappyPath(t *testing.T) {
 			CIDR:   "10.0.0.0/22",
 		},
 	}
-	resp := createVPC(t, svc, "testvpc", "yow", "cloudstack", "10.0.0.0/22", "small")
+	resp := createVPC(t, svc, "testvpc", "yow", "nimbo", "10.0.0.0/22", "small")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
@@ -198,7 +198,7 @@ func TestVPCResource_createHappyPath(t *testing.T) {
 
 func TestVPCResource_createServiceError(t *testing.T) {
 	svc := &fakeVPCService{err: errors.New("quota exceeded")}
-	resp := createVPC(t, svc, "testvpc", "yow", "cloudstack", "10.0.0.0/22", "small")
+	resp := createVPC(t, svc, "testvpc", "yow", "nimbo", "10.0.0.0/22", "small")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure, got none")
 	}

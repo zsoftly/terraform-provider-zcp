@@ -71,7 +71,7 @@ resource "zcp_vpc" "main" {
   type             = "Vpc"
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  plan             = "virtual-private-cloud-vpc-1"
+  plan             = "virtual-private-cloud-vpc"
 }
 
 resource "zcp_network" "subnet" {

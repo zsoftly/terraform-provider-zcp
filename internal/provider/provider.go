@@ -129,6 +129,9 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewVPNCustomerGatewayResource,
 		NewPortForwardResource,
 		NewVPCVPNGatewayResource,
+		NewInstanceResource,
+		NewVolumeResource,
+		NewKubernetesClusterResource,
 	}
 }
 

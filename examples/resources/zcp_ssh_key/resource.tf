@@ -7,7 +7,7 @@ data "zcp_region" "yow" {
 # ── Example 1: single deploy key read from disk ───────────────────────────────
 resource "zcp_ssh_key" "deploy" {
   name       = "deploy-key"
-  public_key = file("~/.ssh/id_ed25519.pub")
+  public_key = file(pathexpand("~/.ssh/id_ed25519.pub"))
   region     = data.zcp_region.yow.slug
 }
 

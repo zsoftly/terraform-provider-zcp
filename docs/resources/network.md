@@ -8,7 +8,7 @@ description: |-
 
 Manages a ZCP network. Networks provide L2/L3 connectivity for virtual machines within a region.
 
-`cloud_provider`, `region`, `project`, and `category_slug` are immutable after creation — changing any of these forces replacement. `name` and `description` can be updated in-place.
+`cloud_provider`, `region`, `project`, and `category_slug` are immutable after creation. Changing any of these forces replacement. `name` and `description` can be updated in-place.
 
 ~> **Note on `category_slug`:** The ZCP API does not return this field after creation. It is preserved in Terraform state but cannot be verified on subsequent reads. Changes to this field force replacement.
 
@@ -19,7 +19,7 @@ data "zcp_region" "yow" {
   slug = "yow-1"
 }
 
-# cloud_provider is read from the region — no hardcoding required.
+# cloud_provider is read from the region (no hardcoding required).
 resource "zcp_network" "app" {
   name           = "app-network"
   cloud_provider = data.zcp_region.yow.cloud_provider
@@ -44,14 +44,14 @@ After import, `cloud_provider`, `region`, `project`, and `category_slug` will be
 ### Required
 
 - `name` (String) Display name for the network.
-- `cloud_provider` (String) Cloud provider slug (e.g. `cloudstack`). Changing this forces replacement.
+- `cloud_provider` (String) Cloud provider slug (e.g. `nimbo`). Changing this forces replacement.
 - `region` (String) Region slug where the network is created. Changing this forces replacement.
 
 ### Optional
 
 - `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
 - `description` (String) Human-readable description.
-- `category_slug` (String) Network category slug. Not returned by the API after creation; changes force replacement.
+- `category_slug` (String) Network category slug. Not returned by the API after creation. Changes force replacement.
 
 ### Read-Only
 
