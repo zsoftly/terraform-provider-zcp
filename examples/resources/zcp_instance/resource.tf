@@ -32,9 +32,9 @@ resource "zcp_instance" "web" {
   ssh_key          = zcp_ssh_key.deploy.name
 }
 
-# ── Instance with optional extras: user data, tags, explicit power state ───────
-# tags and power_state are entirely optional — only set power_state when you want
-# Terraform to actively keep the instance stopped or running.
+# ── Instance with optional extras: user data and tags ─────────────────────────
+# tags are optional. Terraform does not manage the instance's power state — the
+# running/stopped status is reported read-only in `state`.
 resource "zcp_instance" "app" {
   name             = "app-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider
@@ -57,8 +57,6 @@ resource "zcp_instance" "app" {
     Environment = "production"
     Team        = "platform"
   }
-
-  power_state = "stopped" # keep this instance powered off
 }
 
 # ── Outputs ───────────────────────────────────────────────────────────────────

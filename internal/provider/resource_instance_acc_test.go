@@ -16,7 +16,7 @@ import (
 
 type instanceAccConfig struct {
 	region, template, networkPlan, storageCategory, sshKey, project string
-	name, plan, userData, powerState                                string
+	name, plan, userData                                            string
 	tags                                                            map[string]string
 }
 
@@ -45,9 +45,6 @@ resource "zcp_instance" "test" {
 	}
 	if c.userData != "" {
 		fmt.Fprintf(&b, "  user_data = %q\n", c.userData)
-	}
-	if c.powerState != "" {
-		fmt.Fprintf(&b, "  power_state = %q\n", c.powerState)
 	}
 	if c.tags != nil {
 		// Deterministic key order keeps the rendered config stable across plans.
@@ -107,19 +104,14 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 	create.name = "tf-acc-instance"
 	create.tags = map[string]string{"Environment": "test"}
 
-	// In-place update WITHOUT managing power: rename, resize, set startup script,
-	// change tags. The provider must transparently stop/restart for the resize.
+	// In-place update WITHOUT managing power: rename (display name), resize, set
+	// startup script, change tags. The provider transparently stops/restarts for
+	// the resize and posts the correct vm_label payload for the rename.
 	updated := base
 	updated.name = "tf-acc-instance-renamed"
 	updated.plan = resizePlan
 	updated.userData = "#cloud-config\npackages:\n  - htop\n"
 	updated.tags = map[string]string{"Environment": "prod", "Team": "platform"}
-
-	stopped := updated
-	stopped.powerState = "stopped"
-
-	started := updated
-	started.powerState = "running"
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
@@ -131,7 +123,6 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("zcp_instance.test", "name", "tf-acc-instance"),
 					resource.TestCheckResourceAttr("zcp_instance.test", "state", "Running"),
-					resource.TestCheckResourceAttr("zcp_instance.test", "power_state", "running"),
 					resource.TestCheckResourceAttrSet("zcp_instance.test", "id"),
 					resource.TestCheckResourceAttrSet("zcp_instance.test", "private_ip"),
 				),
@@ -140,21 +131,14 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 				Config:   testAccInstanceConfig(create),
 				PlanOnly: true,
 			},
-			{ // in-place: rename + resize + user_data + tags
+			{ // in-place: rename + resize (transparent stop/restart) + user_data + tags
 				Config: testAccInstanceConfig(updated),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr("zcp_instance.test", "name", "tf-acc-instance-renamed"),
 					resource.TestCheckResourceAttr("zcp_instance.test", "plan", resizePlan),
+					resource.TestCheckResourceAttr("zcp_instance.test", "state", "Running"),
 					resource.TestCheckResourceAttr("zcp_instance.test", "tags.Team", "platform"),
 				),
-			},
-			{ // power off
-				Config: testAccInstanceConfig(stopped),
-				Check:  resource.TestCheckResourceAttr("zcp_instance.test", "power_state", "stopped"),
-			},
-			{ // power on
-				Config: testAccInstanceConfig(started),
-				Check:  resource.TestCheckResourceAttr("zcp_instance.test", "power_state", "running"),
 			},
 			{ // import
 				ResourceName:      "zcp_instance.test",

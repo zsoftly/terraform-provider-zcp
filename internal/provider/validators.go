@@ -50,34 +50,3 @@ func (v planServiceTypeValidator) ValidateString(_ context.Context, req validato
 		fmt.Sprintf("%q is not a valid service type. Must be one of: %s.", val, strings.Join(validPlanServiceTypes, ", ")),
 	)
 }
-
-// validPowerStates are the values a user may set for zcp_instance.power_state.
-var validPowerStates = []string{"running", "stopped"}
-
-// powerStateValidator ensures power_state is one of the supported target states.
-type powerStateValidator struct{}
-
-func (v powerStateValidator) Description(_ context.Context) string {
-	return fmt.Sprintf("must be one of: %s", strings.Join(validPowerStates, ", "))
-}
-
-func (v powerStateValidator) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-
-func (v powerStateValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	val := req.ConfigValue.ValueString()
-	for _, s := range validPowerStates {
-		if s == val {
-			return
-		}
-	}
-	resp.Diagnostics.AddAttributeError(
-		req.Path,
-		"Invalid power_state",
-		fmt.Sprintf("%q is not a valid power_state. Must be one of: %s.", val, strings.Join(validPowerStates, ", ")),
-	)
-}

@@ -51,9 +51,12 @@ func (f *fakeInstanceService) WaitForState(_ context.Context, _ string, states [
 	f.waitedStates = append(f.waitedStates, states)
 	return f.waited, f.waitErr
 }
-func (f *fakeInstanceService) ChangeHostname(_ context.Context, _ string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error) {
-	f.renamedTo = req.Name
-	return &instance.ActionResponse{}, nil
+func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name string) error {
+	f.renamedTo = name
+	if f.got != nil {
+		f.got.Name = name
+	}
+	return nil
 }
 func (f *fakeInstanceService) ChangePlan(_ context.Context, _ string, req instance.ChangePlanRequest) (*instance.ActionResponse, error) {
 	f.changedPlan = &req
@@ -108,7 +111,6 @@ type instanceStateModel struct {
 	StorageCategory types.String   `tfsdk:"storage_category"`
 	UserData        types.String   `tfsdk:"user_data"`
 	Tags            types.Map      `tfsdk:"tags"`
-	PowerState      types.String   `tfsdk:"power_state"`
 	Slug            types.String   `tfsdk:"slug"`
 	State           types.String   `tfsdk:"state"`
 	PrivateIP       types.String   `tfsdk:"private_ip"`
@@ -152,7 +154,6 @@ func instanceValues(t *testing.T, id string) map[string]tftypes.Value {
 		"storage_category": null(),
 		"user_data":        null(),
 		"tags":             tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil),
-		"power_state":      null(),
 		"slug":             idVal,
 		"state":            null(),
 		"private_ip":       null(),
@@ -252,14 +253,13 @@ func tagsVal(m map[string]string) tftypes.Value {
 
 // instanceVariant returns a full attribute map for slug "vm1-abc" with the given
 // mutable fields, suitable for both plan and state in update tests.
-func instanceVariant(t *testing.T, name, plan, billing, userData, power string, tags map[string]string) map[string]tftypes.Value {
+func instanceVariant(t *testing.T, name, plan, billing, userData string, tags map[string]string) map[string]tftypes.Value {
 	t.Helper()
 	v := instanceValues(t, "vm1-abc")
 	v["name"] = tftypes.NewValue(tftypes.String, name)
 	v["plan"] = tftypes.NewValue(tftypes.String, plan)
 	v["billing_cycle"] = tftypes.NewValue(tftypes.String, billing)
 	v["user_data"] = strVal(userData)
-	v["power_state"] = strVal(power)
 	v["tags"] = tagsVal(tags)
 	return v
 }
@@ -282,16 +282,16 @@ func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap ma
 // stops the (running) VM, changes the offering, and restarts it back to running —
 // without the user touching power_state.
 func TestInstanceResource_updateResizeIsTransparent(t *testing.T) {
-	vm := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm2", State: "Running"}
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", State: "Running"}
 	svc := &fakeInstanceService{got: vm, waited: vm}
-	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", "running", nil)
-	plan := instanceVariant(t, "vm2", "ci1.large", "hourly", "echo hi", "running", nil)
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.large", "hourly", "echo hi", nil)
 	resp := updateInstance(t, svc, plan, state)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
 	if svc.renamedTo != "vm2" {
-		t.Errorf("renamedTo = %q, want vm2", svc.renamedTo)
+		t.Errorf("renamedTo = %q, want vm2 (display name updated in place)", svc.renamedTo)
 	}
 	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
 		t.Errorf("changedPlan = %+v, want plan ci1.large", svc.changedPlan)
@@ -311,20 +311,23 @@ func TestInstanceResource_updateResizeIsTransparent(t *testing.T) {
 	}
 }
 
-func TestInstanceResource_updateStop(t *testing.T) {
-	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
+// TestInstanceResource_updateResizeWhenStopped verifies that resizing a VM that
+// is already stopped does not start it — power state is preserved, not managed.
+func TestInstanceResource_updateResizeWhenStopped(t *testing.T) {
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Stopped"}
 	svc := &fakeInstanceService{got: vm, waited: vm}
-	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", "running", nil)
-	plan := instanceVariant(t, "vm1", "ci1.small", "hourly", "", "stopped", nil)
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm1", "ci1.large", "hourly", "", nil)
 	resp := updateInstance(t, svc, plan, state)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if svc.stopCalled != 1 {
-		t.Errorf("stopCalled = %d, want 1", svc.stopCalled)
+	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
+		t.Errorf("changedPlan = %+v, want plan ci1.large", svc.changedPlan)
 	}
-	if svc.startCalled != 0 {
-		t.Errorf("startCalled = %d, want 0", svc.startCalled)
+	// Already stopped → no stop and no start; the VM stays stopped.
+	if svc.stopCalled != 0 || svc.startCalled != 0 {
+		t.Errorf("power toggled for an already-stopped VM: stop=%d start=%d", svc.stopCalled, svc.startCalled)
 	}
 	if vm.State != "Stopped" {
 		t.Errorf("final VM state = %q, want Stopped", vm.State)
@@ -334,8 +337,8 @@ func TestInstanceResource_updateStop(t *testing.T) {
 func TestInstanceResource_updateTags(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
 	svc := &fakeInstanceService{got: vm, waited: vm}
-	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", "running", map[string]string{"A": "1", "C": "9"})
-	plan := instanceVariant(t, "vm1", "ci1.small", "hourly", "", "running", map[string]string{"A": "2", "B": "3"})
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", map[string]string{"A": "1", "C": "9"})
+	plan := instanceVariant(t, "vm1", "ci1.small", "hourly", "", map[string]string{"A": "2", "B": "3"})
 	resp := updateInstance(t, svc, plan, state)
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
@@ -346,7 +349,7 @@ func TestInstanceResource_updateTags(t *testing.T) {
 	if len(svc.tagsDeleted) != 1 || svc.tagsDeleted[0] != "C" {
 		t.Errorf("tagsDeleted = %v, want [C]", svc.tagsDeleted)
 	}
-	// No resize and already running → no power toggling.
+	// No resize → no power toggling.
 	if svc.stopCalled != 0 || svc.startCalled != 0 {
 		t.Errorf("power toggled unexpectedly: stop=%d start=%d", svc.stopCalled, svc.startCalled)
 	}

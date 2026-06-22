@@ -12,10 +12,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
-	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/instance"
+	"github.com/zsoftly/zcp-cli/pkg/httpclient"
 )
 
 var _ resource.Resource = &instanceResource{}
@@ -26,7 +26,7 @@ type instanceServiceIface interface {
 	Create(ctx context.Context, req instance.CreateRequest) (*instance.VirtualMachine, error)
 	Get(ctx context.Context, slug string) (*instance.VirtualMachine, error)
 	WaitForState(ctx context.Context, slug string, targetStates []string, pollInterval time.Duration) (*instance.VirtualMachine, error)
-	ChangeHostname(ctx context.Context, slug string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error)
+	ChangeLabel(ctx context.Context, slug, name string) error
 	ChangePlan(ctx context.Context, slug string, req instance.ChangePlanRequest) (*instance.ActionResponse, error)
 	ChangeStartupScript(ctx context.Context, slug string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error)
 	CreateTag(ctx context.Context, slug string, req instance.TagRequest) (*instance.ActionResponse, error)
@@ -34,6 +34,26 @@ type instanceServiceIface interface {
 	Start(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Stop(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Delete(ctx context.Context, slug string, expunge bool) error
+}
+
+// instanceService adapts the zcp-cli instance.Service, overriding the rename
+// operation. The released CLI's ChangeHostname posts {name, hostname} to
+// /change-label, but the API requires the field `vm_label` (its validation
+// rejects the CLI payload with "The vm label field is required" — a known,
+// unfixed CLI bug). We post the correct body directly via the shared HTTP client
+// so display-name changes apply in place.
+type instanceService struct {
+	*instance.Service
+	client *httpclient.Client
+}
+
+func (s *instanceService) ChangeLabel(ctx context.Context, slug, name string) error {
+	body := map[string]string{"vm_label": name}
+	var resp instance.ActionResponse
+	if err := s.client.Post(ctx, "/virtual-machines/"+slug+"/change-label", body, &resp); err != nil {
+		return err
+	}
+	return nil
 }
 
 type instanceResource struct {
@@ -55,7 +75,6 @@ type instanceResourceModel struct {
 	StorageCategory types.String `tfsdk:"storage_category"`
 	UserData        types.String `tfsdk:"user_data"`
 	Tags            types.Map    `tfsdk:"tags"`
-	PowerState      types.String `tfsdk:"power_state"`
 	// Computed
 	Slug      types.String   `tfsdk:"slug"`
 	State     types.String   `tfsdk:"state"`
@@ -76,7 +95,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`, `billing_cycle`, `user_data`, `tags`, and `power_state` are updated in place (mirroring the CLI `change-*`, tag, and start/stop operations); `cloud_provider`, `region`, and `template` force replacement.",
+		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `plan`, `billing_cycle`, `user_data`, and `tags` are updated in place; `name`, `cloud_provider`, `region`, and `template` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a resize requires it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -85,7 +104,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Display name (and hostname) of the instance. Updated in place via the change-hostname operation.",
+				MarkdownDescription: "Display name of the instance. Updated in place. (The instance's hostname is set from this value at creation and, like all clouds, is not changed afterward.)",
 			},
 			"cloud_provider": schema.StringAttribute{
 				Required:            true,
@@ -139,13 +158,6 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				ElementType:         types.StringType,
 				MarkdownDescription: "Key/value tags applied via the tag-create / tag-delete operations. Write-only: the ZCP API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.",
 			},
-			"power_state": schema.StringAttribute{
-				Optional:            true,
-				Computed:            true,
-				MarkdownDescription: "Desired power state: `running` or `stopped`. When set, the provider enforces it via start/stop; when omitted it simply reflects the instance's current state. Defaults to `running` on create.",
-				PlanModifiers:       useStateForUnknown,
-				Validators:          []validator.String{powerStateValidator{}},
-			},
 			"slug": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Instance slug (same value as `id`).",
@@ -153,7 +165,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"state": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Current instance state (e.g. `Running`).",
+				MarkdownDescription: "Current runtime state of the instance (e.g. `Running`, `Stopped`), reported for information only — Terraform does not reconcile or manage power state.",
 			},
 			"private_ip": schema.StringAttribute{
 				Computed:            true,
@@ -183,33 +195,23 @@ func (r *instanceResource) Configure(_ context.Context, req resource.ConfigureRe
 		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *ProviderData, got %T.", req.ProviderData))
 		return
 	}
-	r.svc = instance.NewService(pd.Client)
+	r.svc = &instanceService{Service: instance.NewService(pd.Client), client: pd.Client}
 	r.defaultProject = pd.DefaultProject
 }
 
-// normalizePowerState maps a CloudStack VM state to a power_state value. Only
-// running/stopped are valid user inputs; any other (transient) state is
-// lowercased so the computed attribute always holds a known value.
-func normalizePowerState(state string) string {
-	switch strings.ToLower(state) {
-	case "running":
-		return "running"
-	case "stopped":
-		return "stopped"
-	default:
-		return strings.ToLower(state)
-	}
+// isRunning reports whether a CloudStack VM state string means the VM is running.
+func isRunning(state string) bool {
+	return strings.EqualFold(state, "running")
 }
 
-// applyVMState populates the computed attributes (id/slug/state/IPs/power_state)
-// from a VM. It does NOT touch tags (the API never returns them).
+// applyVMState populates the computed attributes (id/slug/state/IPs) from a VM.
+// It does NOT touch tags (the API never returns them) and does not manage power.
 func (r *instanceResource) applyVMState(model *instanceResourceModel, vm *instance.VirtualMachine) {
 	model.ID = types.StringValue(vm.Slug)
 	model.Slug = types.StringValue(vm.Slug)
 	model.State = types.StringValue(vm.State)
 	model.PrivateIP = types.StringValue(vm.NetworkPrivateIP())
 	model.PublicIP = types.StringValue(instance.StringVal(vm.PublicIP))
-	model.PowerState = types.StringValue(normalizePowerState(vm.State))
 }
 
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -296,19 +298,6 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		}
 	}
 
-	// If the user explicitly requested a stopped instance, stop it now.
-	if model.PowerState.ValueString() == "stopped" {
-		if _, err := r.svc.Stop(ctx, slug); err != nil {
-			resp.Diagnostics.AddError("Failed to stop instance", err.Error())
-			return
-		}
-		ready, err = r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0)
-		if err != nil {
-			resp.Diagnostics.AddError("Instance did not reach Stopped", err.Error())
-			return
-		}
-	}
-
 	r.applyVMState(&model, ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
@@ -369,23 +358,10 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	slug := state.ID.ValueString()
 
-	// The instance should end in this power state. power_state is Optional+Computed
-	// with UseStateForUnknown, so the plan value is always known here — either what
-	// the user set or the carried-over current state. Resizing is transparent: the
-	// VM is stopped to change its compute offering and then restored to this state
-	// (mirroring how aws_instance handles an instance_type change), so users never
-	// manage power just to resize.
-	desiredPower := plan.PowerState.ValueString()
-	if desiredPower == "" {
-		desiredPower = "running"
-	}
-
-	// 1. Rename (change-hostname sets both name and hostname).
+	// 1. Display name (change-label). hostname is set once at create and never
+	//    changed — only the display name is mutable.
 	if !plan.Name.Equal(state.Name) {
-		if _, err := r.svc.ChangeHostname(ctx, slug, instance.ChangeLabelRequest{
-			Name:     plan.Name.ValueString(),
-			Hostname: plan.Name.ValueString(),
-		}); err != nil {
+		if err := r.svc.ChangeLabel(ctx, slug, plan.Name.ValueString()); err != nil {
 			resp.Diagnostics.AddError("Failed to rename instance", err.Error())
 			return
 		}
@@ -401,25 +377,14 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// 3. Plan / billing cycle (resize) — stop, change the offering, then let the
-	//    power-state reconciliation below restart it if it was running. Changing a
-	//    CloudStack compute offering requires the VM to be stopped.
+	// 3. Plan / billing cycle (resize) — Terraform does not manage power state, but
+	//    changing a CloudStack compute offering requires the VM to be stopped, so
+	//    the provider transparently stops it (only if it was running), changes the
+	//    offering, and restarts it back to its prior state. This is the only place
+	//    power is touched, and it mirrors how aws_instance handles instance_type.
 	if !plan.Plan.Equal(state.Plan) || !plan.BillingCycle.Equal(state.BillingCycle) {
-		if err := r.ensureStopped(ctx, slug); err != nil {
-			resp.Diagnostics.AddError("Failed to stop instance for resize", err.Error())
-			return
-		}
-		if _, err := r.svc.ChangePlan(ctx, slug, instance.ChangePlanRequest{
-			Plan:         plan.Plan.ValueString(),
-			Slug:         slug,
-			VM:           slug,
-			BillingCycle: plan.BillingCycle.ValueString(),
-		}); err != nil {
-			resp.Diagnostics.AddError("Failed to change instance plan", err.Error())
-			return
-		}
-		if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
-			resp.Diagnostics.AddError("Instance did not settle after plan change", err.Error())
+		if err := r.resize(ctx, slug, plan); err != nil {
+			resp.Diagnostics.AddError("Failed to resize instance", err.Error())
 			return
 		}
 	}
@@ -432,13 +397,7 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// 5. Reconcile to the desired power state (also restores a VM stopped for resize).
-	if err := r.ensurePowerState(ctx, slug, desiredPower); err != nil {
-		resp.Diagnostics.AddError("Failed to reach desired power state", err.Error())
-		return
-	}
-
-	// Re-read for consistent computed values (state, IPs, power_state).
+	// Re-read for consistent computed values (state, IPs).
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to refresh instance after update", err.Error())
@@ -448,52 +407,46 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
-// ensureStopped stops the instance if it is not already stopped and waits for it
-// to reach the Stopped state.
-func (r *instanceResource) ensureStopped(ctx context.Context, slug string) error {
+// resize changes the instance's compute offering. Because CloudStack requires a
+// stopped VM to change its offering, it stops the VM first if it is running and
+// restarts it afterward, leaving it in the same power state it started in.
+func (r *instanceResource) resize(ctx context.Context, slug string, plan instanceResourceModel) error {
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
 		return err
 	}
-	if normalizePowerState(vm.State) == "stopped" {
-		return nil
-	}
-	if _, err := r.svc.Stop(ctx, slug); err != nil {
-		return err
-	}
-	_, err = r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0)
-	return err
-}
+	wasRunning := isRunning(vm.State)
 
-// ensurePowerState drives the instance to the requested power state
-// ("running" or "stopped"), waiting for it to settle. It is a no-op when the
-// instance is already there.
-func (r *instanceResource) ensurePowerState(ctx context.Context, slug, desired string) error {
-	vm, err := r.svc.Get(ctx, slug)
-	if err != nil {
-		return err
-	}
-	current := normalizePowerState(vm.State)
-	switch desired {
-	case "stopped":
-		if current == "stopped" {
-			return nil
-		}
+	if wasRunning {
 		if _, err := r.svc.Stop(ctx, slug); err != nil {
 			return err
 		}
-		_, err = r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0)
-		return err
-	default: // running
-		if current == "running" {
-			return nil
+		if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
+			return err
 		}
+	}
+
+	if _, err := r.svc.ChangePlan(ctx, slug, instance.ChangePlanRequest{
+		Plan:         plan.Plan.ValueString(),
+		Slug:         slug,
+		VM:           slug,
+		BillingCycle: plan.BillingCycle.ValueString(),
+	}); err != nil {
+		return err
+	}
+	if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
+		return err
+	}
+
+	if wasRunning {
 		if _, err := r.svc.Start(ctx, slug); err != nil {
 			return err
 		}
-		_, err = r.svc.WaitForState(ctx, slug, []string{"Running"}, 0)
-		return err
+		if _, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0); err != nil {
+			return err
+		}
 	}
+	return nil
 }
 
 // mapToStringMap converts a (possibly null/unknown) types.Map of strings into a
@@ -580,9 +533,9 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 //
 //	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>
 //
-// <slug>/<cloud_provider>/<region>/<template> are required. name, state, IPs and
-// power_state come from the subsequent Read; tags cannot be imported (the API
-// does not return them).
+// <slug>/<cloud_provider>/<region>/<template> are required. name, state and IPs
+// come from the subsequent Read; tags cannot be imported (the API does not
+// return them).
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network_plan", "storage_category"}
 	importPositional(ctx, req, resp, fields, 4,

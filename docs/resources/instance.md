@@ -10,10 +10,12 @@ Manages a ZCP virtual machine instance. Create **blocks until the instance reach
 
 The resource maps the CLI's instance operations to Terraform's declarative model:
 
-- **In-place updates:** `name` (change-hostname), `plan` + `billing_cycle` (resize), `user_data` (change-startup-script), `tags` (tag-create / tag-delete), and `power_state` (start / stop).
+- **In-place updates:** `name` (display name), `plan` + `billing_cycle` (resize), `user_data` (change-startup-script), and `tags` (tag-create / tag-delete).
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template change reprovisions the disk), and the other create-only inputs (`project`, `ssh_key`, `network_plan`, `storage_category`).
 
-**Resizing is transparent.** Changing `plan` (and/or `billing_cycle`) makes the provider stop the instance, change its compute offering, and restart it to its previous power state — you do not manage power yourself, exactly like changing an `aws_instance` `instance_type`. `power_state` and `tags` are optional; only set `power_state` when you want Terraform to actively keep the instance `stopped` or `running`.
+**Power state is not managed by Terraform.** The instance's runtime state (running/stopped) is reported read-only in `state`; running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize** — changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, exactly like changing an `aws_instance` `instance_type`. `tags` are optional.
+
+~> **Hostname is set once at creation** (from `name`) and is not changed afterward — only the display `name` is mutable. This matches CloudStack/EC2 behaviour.
 
 Imperative, non-declarative CLI operations — `reboot`/`reset`, `change-password`, `ssh`, `logs`, and `addons` — are intentionally not modeled as resource attributes; use the `zcp` CLI for those.
 
@@ -55,11 +57,11 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 
 ### Required
 
-- `name` (String) Display name (and hostname) of the instance. Updated in place via change-hostname.
+- `name` (String) Display name of the instance. Updated in place. The hostname is set from this value at creation and is not changed afterward.
 - `cloud_provider` (String) Cloud provider slug. Use `data.zcp_region.<name>.cloud_provider`. Changing this forces replacement.
 - `region` (String) Region slug (e.g. `yow-1`). Changing this forces replacement.
 - `template` (String) Template (OS image) slug. See `data.zcp_template`. Changing this forces replacement.
-- `plan` (String) Compute plan slug. Run `zcp plan vm` to list values. Updated in place (resize): the provider stops the instance, changes the offering, and restarts it to its prior power state.
+- `plan` (String) Compute plan slug. Run `zcp plan vm` to list values. Updated in place (resize): the provider stops the instance, changes the offering, and restarts it to its prior running/stopped state.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Updated in place together with `plan`.
 
 ### Optional
@@ -70,13 +72,12 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 - `storage_category` (String) Storage category slug (e.g. `nvme`, `pro-nvme`). Required by the public API. Changing this forces replacement.
 - `user_data` (String) Startup script content (cloud-init / bash). Updated in place via change-startup-script (takes effect on next boot).
 - `tags` (Map of String) Key/value tags applied via tag-create / tag-delete. **Write-only:** the API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.
-- `power_state` (String) Desired power state: `running` or `stopped`. When set, the provider enforces it via start/stop; when omitted it reflects the current state. Defaults to `running` on create.
 - `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 30m.
 
 ### Read-Only
 
 - `id` (String) Instance slug (unique identifier).
 - `slug` (String) Instance slug (same value as `id`).
-- `state` (String) Current instance state (e.g. `Running`).
+- `state` (String) Current runtime state of the instance (e.g. `Running`, `Stopped`), reported for information only — Terraform does not reconcile or manage power state.
 - `private_ip` (String) Private IP of the instance's default network.
 - `public_ip` (String) Public IP of the instance, if assigned.
