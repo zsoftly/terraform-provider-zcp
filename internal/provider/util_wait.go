@@ -35,3 +35,35 @@ func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx 
 		}
 	}
 }
+
+// pollUntilReady polls check every interval until it reports the resource is
+// ready (done == true) or the context is cancelled / deadline exceeded.
+//
+// check is invoked immediately on entry (before the first sleep) so a resource
+// that is already in the target state returns without delay — this also keeps
+// unit tests that supply an already-ready fake from blocking on the interval.
+//
+// check must return:
+//   - (true,  nil) — resource reached the target state; done
+//   - (false, nil) — not there yet; keep polling
+//   - (_,    err)  — terminal error (e.g. a failure state); stop and surface it
+func pollUntilReady(ctx context.Context, interval time.Duration, check func(ctx context.Context) (done bool, err error)) error {
+	for {
+		done, err := check(ctx)
+		if err != nil {
+			return err
+		}
+		if done {
+			return nil
+		}
+		t := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !t.Stop() {
+				<-t.C
+			}
+			return ctx.Err()
+		case <-t.C:
+		}
+	}
+}

@@ -84,3 +84,21 @@ func NewVPNCustomerGatewayResourceWithService(svc vpnCustomerGatewayServiceIface
 func NewFirewallRuleResourceWithService(svc firewallServiceIface) resource.Resource {
 	return &firewallRuleResource{svc: svc}
 }
+
+// NewInstanceResourceWithService creates an instanceResource pre-wired with the
+// given service; available only in test binaries.
+func NewInstanceResourceWithService(svc instanceServiceIface) resource.Resource {
+	return &instanceResource{svc: svc}
+}
+
+// NewVolumeResourceWithService creates a volumeResource pre-wired with the
+// given service; available only in test binaries.
+func NewVolumeResourceWithService(svc volumeServiceIface) resource.Resource {
+	return &volumeResource{svc: svc}
+}
+
+// NewKubernetesClusterResourceWithService creates a kubernetesClusterResource
+// pre-wired with the given service; available only in test binaries.
+func NewKubernetesClusterResourceWithService(svc kubernetesServiceIface) resource.Resource {
+	return &kubernetesClusterResource{svc: svc}
+}
