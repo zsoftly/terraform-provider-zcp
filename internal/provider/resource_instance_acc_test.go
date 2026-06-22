@@ -55,7 +55,7 @@ resource "zcp_instance" "test" {
 		sort.Strings(keys)
 		b.WriteString("  tags = {\n")
 		for _, k := range keys {
-			fmt.Fprintf(&b, "    %s = %q\n", k, c.tags[k])
+			fmt.Fprintf(&b, "    %q = %q\n", k, c.tags[k])
 		}
 		b.WriteString("  }\n")
 	}

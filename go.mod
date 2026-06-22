@@ -1,6 +1,6 @@
 module github.com/zsoftly/terraform-provider-zcp
 
-go 1.25.8
+go 1.25.11
 
 toolchain go1.26.4
 

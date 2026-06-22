@@ -6,6 +6,7 @@ import (
 	"os"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-testing/helper/acctest"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
@@ -67,7 +68,8 @@ func TestAccKubernetesClusterResource_lifecycle(t *testing.T) {
 	storageCategory := accEnv(t, "ZCP_ACC_STORAGE_CATEGORY")
 	sshKey := os.Getenv("ZCP_ACC_SSH_KEY")
 	project := os.Getenv("ZCP_ACC_PROJECT")
-	name := "tf-acc-k8s"
+	// Unique per-run name avoids collisions across retries or concurrent runs.
+	name := acctest.RandomWithPrefix("tf-acc-k8s")
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },

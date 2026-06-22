@@ -13,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/kubernetes"
@@ -107,6 +108,7 @@ func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.Schem
 			"workers": schema.Int64Attribute{
 				Required:            true,
 				MarkdownDescription: "Number of worker nodes (>= 1). Changing this scales the cluster in place.",
+				Validators:          []validator.Int64{int64AtLeastValidator{min: 1}},
 			},
 			"storage_category": schema.StringAttribute{
 				Required:            true,
@@ -128,6 +130,7 @@ func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.Schem
 				Computed:            true,
 				MarkdownDescription: "Number of control-plane nodes (default 1; use >= 3 for HA). Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace(), int64planmodifier.UseStateForUnknown()},
+				Validators:          []validator.Int64{int64AtLeastValidator{min: 1}},
 			},
 			"ha": schema.BoolAttribute{
 				Optional:            true,

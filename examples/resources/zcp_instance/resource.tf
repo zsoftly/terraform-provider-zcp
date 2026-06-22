@@ -6,7 +6,7 @@ data "zcp_region" "yow" {
 # An SSH key to attach for login (see zcp_ssh_key).
 resource "zcp_ssh_key" "deploy" {
   name       = "deploy-key"
-  public_key = file("~/.ssh/id_ed25519.pub")
+  public_key = file(pathexpand("~/.ssh/id_ed25519.pub"))
   region     = data.zcp_region.yow.slug
 }
 

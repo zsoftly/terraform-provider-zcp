@@ -63,7 +63,7 @@ func testAccCheckVolumeDestroyed(t *testing.T, region string) resource.TestCheck
 // straight from the CLI. Size-based is the working path.
 func TestAccVolumeResource_lifecycle(t *testing.T) {
 	region := accEnvDefault("ZCP_ACC_VOLUME_REGION", accRegion())
-	storageCategory := accEnv(t, "ZCP_ACC_VOLUME_STORAGE_CATEGORY")
+	storageCategory := accEnv(t, "ZCP_ACC_STORAGE_CATEGORY")
 	project := os.Getenv("ZCP_ACC_PROJECT")
 	name := "tf-acc-volume"
 	billingCycle := "hourly"

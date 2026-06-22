@@ -73,6 +73,8 @@ func accClient(t *testing.T) *httpclient.Client {
 	return httpclient.New(httpclient.Options{
 		BaseURL:     accEnvDefault("ZCP_API_URL", "https://api.zcp.zsoftly.ca/api"),
 		BearerToken: os.Getenv("ZCP_BEARER_TOKEN"),
-		Timeout:     5 * time.Minute,
+		// 5 minutes mirrors the provider's own httpclient timeout (see provider
+		// Configure); ZCP list/get calls can be slow under load.
+		Timeout: 5 * time.Minute,
 	})
 }

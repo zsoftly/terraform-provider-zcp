@@ -30,14 +30,15 @@ type fakeInstanceService struct {
 	getCalls  int
 
 	// update-path capture
-	renamedTo    string
-	changedPlan  *instance.ChangePlanRequest
-	changedUD    *string
-	tagsCreated  map[string]string
-	tagsDeleted  []string
-	startCalled  int
-	stopCalled   int
-	waitedStates [][]string
+	renamedTo     string
+	changedPlan   *instance.ChangePlanRequest
+	changePlanErr error
+	changedUD     *string
+	tagsCreated   map[string]string
+	tagsDeleted   []string
+	startCalled   int
+	stopCalled    int
+	waitedStates  [][]string
 }
 
 func (f *fakeInstanceService) Create(_ context.Context, _ instance.CreateRequest) (*instance.VirtualMachine, error) {
@@ -60,7 +61,7 @@ func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name stri
 }
 func (f *fakeInstanceService) ChangePlan(_ context.Context, _ string, req instance.ChangePlanRequest) (*instance.ActionResponse, error) {
 	f.changedPlan = &req
-	return &instance.ActionResponse{}, nil
+	return &instance.ActionResponse{}, f.changePlanErr
 }
 func (f *fakeInstanceService) ChangeStartupScript(_ context.Context, _ string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error) {
 	ud := req.UserData
@@ -331,6 +332,41 @@ func TestInstanceResource_updateResizeWhenStopped(t *testing.T) {
 	}
 	if vm.State != "Stopped" {
 		t.Errorf("final VM state = %q, want Stopped", vm.State)
+	}
+}
+
+// TestInstanceResource_resizeRestartsOnFailure verifies that a failed offering
+// change restarts a VM that was running, honoring the transparent-resize contract.
+func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
+	svc := &fakeInstanceService{got: vm, waited: vm, changePlanErr: errors.New("offering change failed")}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm1", "ci1.large", "hourly", "", nil)
+	resp := updateInstance(t, svc, plan, state)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when ChangePlan fails")
+	}
+	if svc.stopCalled != 1 {
+		t.Errorf("stopCalled = %d, want 1 (stopped for resize)", svc.stopCalled)
+	}
+	if svc.startCalled != 1 {
+		t.Errorf("startCalled = %d, want 1 (restarted after failed resize)", svc.startCalled)
+	}
+}
+
+// TestInstanceResource_createCleansUpOnWaitFailure verifies that a VM which never
+// reaches Running is deleted so it is not orphaned outside Terraform state.
+func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		waitErr: errors.New("timed out"),
+	}
+	resp := createInstance(t, svc)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when wait fails")
+	}
+	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
+		t.Errorf("cleanup Delete called with %v, want [vm1-abc]", svc.deleted)
 	}
 }
 

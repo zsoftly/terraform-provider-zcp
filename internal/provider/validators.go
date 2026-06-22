@@ -50,3 +50,29 @@ func (v planServiceTypeValidator) ValidateString(_ context.Context, req validato
 		fmt.Sprintf("%q is not a valid service type. Must be one of: %s.", val, strings.Join(validPlanServiceTypes, ", ")),
 	)
 }
+
+// int64AtLeastValidator enforces a minimum value on an Int64 attribute.
+type int64AtLeastValidator struct {
+	min int64
+}
+
+func (v int64AtLeastValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("must be at least %d", v.min)
+}
+
+func (v int64AtLeastValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v int64AtLeastValidator) ValidateInt64(_ context.Context, req validator.Int64Request, resp *validator.Int64Response) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if req.ConfigValue.ValueInt64() < v.min {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Value too small",
+			fmt.Sprintf("%d is below the minimum of %d.", req.ConfigValue.ValueInt64(), v.min),
+		)
+	}
+}

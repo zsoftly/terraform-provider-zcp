@@ -5,7 +5,7 @@ data "zcp_region" "yow" {
 
 resource "zcp_ssh_key" "k8s" {
   name       = "k8s-key"
-  public_key = file("~/.ssh/id_ed25519.pub")
+  public_key = file(pathexpand("~/.ssh/id_ed25519.pub"))
   region     = data.zcp_region.yow.slug
 }
 

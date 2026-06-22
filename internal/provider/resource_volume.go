@@ -292,6 +292,14 @@ func (r *volumeResource) Update(ctx context.Context, req resource.UpdateRequest,
 		return
 	}
 
+	updateTimeout, diags := model.Timeouts.Update(ctx, 15*time.Minute)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	ctx, cancel := context.WithTimeout(ctx, updateTimeout)
+	defer cancel()
+
 	slug := state.ID.ValueString()
 	oldVM := state.VM.ValueString()
 	newVM := model.VM.ValueString()
@@ -336,7 +344,8 @@ func (r *volumeResource) Delete(ctx context.Context, req resource.DeleteRequest,
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	// A volume must be detached before it can be deleted.
+	// A volume must be detached before it can be deleted. Detach proactively when
+	// state says it is attached.
 	if model.VM.ValueString() != "" {
 		if _, err := r.svc.Detach(deleteCtx, slug); err != nil && !apierrors.IsNotFound(err) {
 			resp.Diagnostics.AddError("Failed to detach volume before delete", err.Error())
@@ -344,9 +353,18 @@ func (r *volumeResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		}
 	}
 
-	if err := r.svc.Delete(deleteCtx, slug); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
-		resp.Diagnostics.AddError("Failed to delete volume", err.Error())
-		return
+	err := r.svc.Delete(deleteCtx, slug)
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+		// The first delete may fail because the volume is attached out-of-band
+		// (state.vm is stale or empty). Detach, then retry the delete once. The
+		// API derives the VM from the volume, so no VM slug is needed.
+		if _, derr := r.svc.Detach(deleteCtx, slug); derr == nil || apierrors.IsNotFound(derr) {
+			err = r.svc.Delete(deleteCtx, slug)
+		}
+		if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+			resp.Diagnostics.AddError("Failed to delete volume", err.Error())
+			return
+		}
 	}
 }
 

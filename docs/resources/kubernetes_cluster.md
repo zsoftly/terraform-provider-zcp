@@ -61,7 +61,7 @@ terraform import zcp_kubernetes_cluster.main '<slug>/<cloud_provider>/<region>/<
 - `ssh_key` (String) Name of an existing SSH key for node login (see `zcp_ssh_key`). Changing this forces replacement.
 - `control_nodes` (Number) Number of control-plane nodes (default 1, use >= 3 for HA). Changing this forces replacement.
 - `ha` (Boolean) Enable high availability. Changing this forces replacement.
-- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 45m.
+- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 20m.
 
 ### Read-Only
 

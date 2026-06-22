@@ -72,7 +72,7 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 - `storage_category` (String) Storage category slug (e.g. `nvme`, `pro-nvme`). Required by the public API. Changing this forces replacement.
 - `user_data` (String) Startup script content (cloud-init / bash). Updated in place via change-startup-script (takes effect on next boot).
 - `tags` (Map of String) Key/value tags applied via tag-create / tag-delete. **Write-only:** the API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.
-- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 30m.
+- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts. Create defaults to 20m.
 
 ### Read-Only
 

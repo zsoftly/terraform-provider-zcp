@@ -23,14 +23,14 @@ data "zcp_region" "yow" {
   slug = "yow-1"
 }
 
-# Plan-based volume.
+# Size-based volume (recommended while plan-based creation is broken server-side).
 resource "zcp_volume" "data" {
   name             = "data-vol"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  plan             = "b1g1"
+  size             = 20
 }
 
 # Custom-size volume attached to an instance.

@@ -95,7 +95,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `plan`, `billing_cycle`, `user_data`, and `tags` are updated in place; `name`, `cloud_provider`, `region`, and `template` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a resize requires it.",
+		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`, `billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, and `template` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a resize requires it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -276,8 +276,11 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	slug := vm.Slug
 
 	// Block until Running so both IPs are populated (mirrors the CLI --wait).
+	// If any post-create step fails the VM is already provisioned but will not be
+	// saved to state, so clean it up to avoid leaving an unmanaged orphan.
 	ready, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0)
 	if err != nil {
+		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
@@ -289,10 +292,12 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	tags, tdiags := mapToStringMap(ctx, model.Tags)
 	resp.Diagnostics.Append(tdiags...)
 	if resp.Diagnostics.HasError() {
+		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
 		return
 	}
 	for k, v := range tags {
 		if _, err := r.svc.CreateTag(ctx, slug, instance.TagRequest{Key: k, Value: v}); err != nil {
+			r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
 			resp.Diagnostics.AddError("Failed to apply instance tag", fmt.Sprintf("tag %q: %s", k, err.Error()))
 			return
 		}
@@ -407,9 +412,25 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
+// cleanupAfterFailedCreate best-effort deletes an instance that was provisioned
+// but cannot be saved to state because a later create step failed. A cleanup
+// failure is surfaced as a warning (the original error is reported by the caller)
+// so the user knows a manual delete may be needed.
+func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, diags *diag.Diagnostics) {
+	if err := r.svc.Delete(ctx, slug, true); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+		diags.AddWarning(
+			"Orphaned instance not cleaned up",
+			fmt.Sprintf("instance %s was created but provisioning failed, and the cleanup delete also failed: %s. Delete it manually to avoid an orphan.", slug, err.Error()),
+		)
+	}
+}
+
 // resize changes the instance's compute offering. Because CloudStack requires a
 // stopped VM to change its offering, it stops the VM first if it is running and
-// restarts it afterward, leaving it in the same power state it started in.
+// restarts it afterward, leaving it in the same power state it started in. If the
+// offering change fails after the VM was stopped, the VM is restarted (when it
+// was running) before the error is returned, preserving the transparent-resize
+// contract that a failed resize does not leave a previously-running VM stopped.
 func (r *instanceResource) resize(ctx context.Context, slug string, plan instanceResourceModel) error {
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
@@ -426,6 +447,31 @@ func (r *instanceResource) resize(ctx context.Context, slug string, plan instanc
 		}
 	}
 
+	changeErr := r.changeOffering(ctx, slug, plan)
+	if changeErr != nil {
+		// Restore the prior power state before surfacing the error.
+		if wasRunning {
+			if _, serr := r.svc.Start(ctx, slug); serr == nil {
+				_, _ = r.svc.WaitForState(ctx, slug, []string{"Running"}, 0)
+			}
+		}
+		return changeErr
+	}
+
+	if wasRunning {
+		if _, err := r.svc.Start(ctx, slug); err != nil {
+			return err
+		}
+		if _, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// changeOffering performs the ChangePlan call and waits for the VM to settle in
+// Stopped (where a successful offering change leaves it).
+func (r *instanceResource) changeOffering(ctx context.Context, slug string, plan instanceResourceModel) error {
 	if _, err := r.svc.ChangePlan(ctx, slug, instance.ChangePlanRequest{
 		Plan:         plan.Plan.ValueString(),
 		Slug:         slug,
@@ -436,15 +482,6 @@ func (r *instanceResource) resize(ctx context.Context, slug string, plan instanc
 	}
 	if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
 		return err
-	}
-
-	if wasRunning {
-		if _, err := r.svc.Start(ctx, slug); err != nil {
-			return err
-		}
-		if _, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0); err != nil {
-			return err
-		}
 	}
 	return nil
 }
