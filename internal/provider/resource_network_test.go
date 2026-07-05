@@ -50,6 +50,7 @@ type networkStateModel struct {
 	CategorySlug  types.String   `tfsdk:"category_slug"`
 	NetworkPlan   types.String   `tfsdk:"network_plan"`
 	VPC           types.String   `tfsdk:"vpc"`
+	ACL           types.String   `tfsdk:"acl"`
 	BillingCycle  types.String   `tfsdk:"billing_cycle"`
 	Gateway       types.String   `tfsdk:"gateway"`
 	CIDR          types.String   `tfsdk:"cidr"`
@@ -85,6 +86,7 @@ func createNetwork(t *testing.T, svc *fakeNetworkService, name, region, provider
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),
@@ -121,6 +123,7 @@ func readNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.Re
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
@@ -148,6 +151,7 @@ func deleteNetwork(t *testing.T, svc *fakeNetworkService, slug string) resource.
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
@@ -278,6 +282,7 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
@@ -294,6 +299,7 @@ func TestNetworkResource_updateNameDescription(t *testing.T) {
 		"category_slug":  tftypes.NewValue(tftypes.String, "isolated"),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),
@@ -347,6 +353,7 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, "10.0.0.1"),
 		"cidr":           tftypes.NewValue(tftypes.String, "10.0.0.0/24"),
@@ -364,6 +371,7 @@ func TestNetworkResource_updateClearsDescriptionWhenEmpty(t *testing.T) {
 		"category_slug":  tftypes.NewValue(tftypes.String, nil),
 		"network_plan":   tftypes.NewValue(tftypes.String, nil),
 		"vpc":            tftypes.NewValue(tftypes.String, nil),
+		"acl":            tftypes.NewValue(tftypes.String, nil),
 		"billing_cycle":  tftypes.NewValue(tftypes.String, nil),
 		"gateway":        tftypes.NewValue(tftypes.String, nil),
 		"cidr":           tftypes.NewValue(tftypes.String, nil),

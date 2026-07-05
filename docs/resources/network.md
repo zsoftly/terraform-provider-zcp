@@ -52,6 +52,7 @@ After import, `cloud_provider`, `region`, `project`, and `category_slug` will be
 - `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
 - `description` (String) Human-readable description.
 - `category_slug` (String) Network category slug. Not returned by the API after creation. Changes force replacement.
+- `acl` (String) ID of a `zcp_network_acl` to attach to this subnet (VPC subnets only). Updated in place. The API does not return the attached ACL ID on read, so it is preserved from state.
 
 ### Read-Only
 

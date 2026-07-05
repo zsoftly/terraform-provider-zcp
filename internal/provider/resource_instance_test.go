@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -22,10 +23,13 @@ type fakeInstanceService struct {
 	created   *instance.VirtualMachine
 	waited    *instance.VirtualMachine
 	got       *instance.VirtualMachine
+	logs      []instance.ActivityLog
+	createReq instance.CreateRequest
 	createErr error
 	waitErr   error
 	getErr    error
 	deleted   []string
+	expunged  []bool
 	deleteErr error
 	getCalls  int
 
@@ -39,9 +43,24 @@ type fakeInstanceService struct {
 	startCalled   int
 	stopCalled    int
 	waitedStates  [][]string
+
+	// staleCache simulates the CMP's lagging state field: Stop/Start do NOT update
+	// got.State, and instead append a fresh VM.ACTION=SUCCESS log (with a unique,
+	// increasing timestamp) so readiness must come from the activity log.
+	staleCache bool
+	actionSeq  int
 }
 
-func (f *fakeInstanceService) Create(_ context.Context, _ instance.CreateRequest) (*instance.VirtualMachine, error) {
+func (f *fakeInstanceService) pushAction() {
+	f.actionSeq++
+	f.logs = append([]instance.ActivityLog{{
+		Action: "VM.ACTION", Status: "SUCCESS",
+		CreatedAt: fmt.Sprintf("2026-06-22T10:00:%02dZ", f.actionSeq),
+	}}, f.logs...)
+}
+
+func (f *fakeInstanceService) Create(_ context.Context, req instance.CreateRequest) (*instance.VirtualMachine, error) {
+	f.createReq = req
 	return f.created, f.createErr
 }
 func (f *fakeInstanceService) Get(_ context.Context, _ string) (*instance.VirtualMachine, error) {
@@ -52,6 +71,9 @@ func (f *fakeInstanceService) WaitForState(_ context.Context, _ string, states [
 	f.waitedStates = append(f.waitedStates, states)
 	return f.waited, f.waitErr
 }
+func (f *fakeInstanceService) ActivityLogs(_ context.Context, _ string) ([]instance.ActivityLog, error) {
+	return f.logs, nil
+}
 func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name string) error {
 	f.renamedTo = name
 	if f.got != nil {
@@ -61,6 +83,9 @@ func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name stri
 }
 func (f *fakeInstanceService) ChangePlan(_ context.Context, _ string, req instance.ChangePlanRequest) (*instance.ActionResponse, error) {
 	f.changedPlan = &req
+	if f.changePlanErr == nil && f.staleCache {
+		f.pushAction()
+	}
 	return &instance.ActionResponse{}, f.changePlanErr
 }
 func (f *fakeInstanceService) ChangeStartupScript(_ context.Context, _ string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error) {
@@ -81,6 +106,10 @@ func (f *fakeInstanceService) DeleteTag(_ context.Context, _ string, key string)
 }
 func (f *fakeInstanceService) Start(_ context.Context, _ string) (*instance.ActionResponse, error) {
 	f.startCalled++
+	if f.staleCache {
+		f.pushAction()
+		return &instance.ActionResponse{}, nil
+	}
 	if f.got != nil {
 		f.got.State = "Running"
 	}
@@ -88,13 +117,18 @@ func (f *fakeInstanceService) Start(_ context.Context, _ string) (*instance.Acti
 }
 func (f *fakeInstanceService) Stop(_ context.Context, _ string) (*instance.ActionResponse, error) {
 	f.stopCalled++
+	if f.staleCache {
+		f.pushAction()
+		return &instance.ActionResponse{}, nil
+	}
 	if f.got != nil {
 		f.got.State = "Stopped"
 	}
 	return &instance.ActionResponse{}, nil
 }
-func (f *fakeInstanceService) Delete(_ context.Context, slug string, _ bool) error {
+func (f *fakeInstanceService) Delete(_ context.Context, slug string, expunge bool) error {
 	f.deleted = append(f.deleted, slug)
+	f.expunged = append(f.expunged, expunge)
 	return f.deleteErr
 }
 
@@ -108,7 +142,9 @@ type instanceStateModel struct {
 	BillingCycle    types.String   `tfsdk:"billing_cycle"`
 	Project         types.String   `tfsdk:"project"`
 	SSHKey          types.String   `tfsdk:"ssh_key"`
+	Network         types.String   `tfsdk:"network"`
 	NetworkPlan     types.String   `tfsdk:"network_plan"`
+	AssignPublicIP  types.Bool     `tfsdk:"assign_public_ip"`
 	StorageCategory types.String   `tfsdk:"storage_category"`
 	UserData        types.String   `tfsdk:"user_data"`
 	Tags            types.Map      `tfsdk:"tags"`
@@ -151,7 +187,9 @@ func instanceValues(t *testing.T, id string) map[string]tftypes.Value {
 		"billing_cycle":    tftypes.NewValue(tftypes.String, "hourly"),
 		"project":          null(),
 		"ssh_key":          null(),
+		"network":          null(),
 		"network_plan":     null(),
+		"assign_public_ip": tftypes.NewValue(tftypes.Bool, nil),
 		"storage_category": null(),
 		"user_data":        null(),
 		"tags":             tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil),
@@ -214,6 +252,53 @@ func TestInstanceResource_createWaitsForRunning(t *testing.T) {
 	}
 }
 
+// TestInstanceResource_createReadyViaActivityLog verifies the VM.CREATE log is
+// used as the readiness signal: the cached state is still "Starting" but the log
+// reports SUCCESS, so create returns and stamps state as Running.
+func TestInstanceResource_createReadyViaActivityLog(t *testing.T) {
+	pubIP := "203.0.113.9"
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+		// Get returns the stale "Starting" state...
+		got: &instance.VirtualMachine{
+			Slug:     "vm1-abc",
+			State:    "Starting",
+			PublicIP: &pubIP,
+			Networks: []instance.VMNetwork{{IsDefault: true, Pivot: &instance.VMNetworkIP{IsDefault: true, IPAddress: "10.0.0.7"}}},
+		},
+		// ...but the activity log says the VM is up.
+		logs: []instance.ActivityLog{{Action: "VM.CREATE", Status: "SUCCESS"}},
+	}
+	resp := createInstance(t, svc)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.State.ValueString() != "Running" {
+		t.Errorf("State = %q, want Running (log-confirmed despite stale Starting)", got.State.ValueString())
+	}
+	if got.PublicIP.ValueString() != "203.0.113.9" || got.PrivateIP.ValueString() != "10.0.0.7" {
+		t.Errorf("IPs not populated: public=%q private=%q", got.PublicIP.ValueString(), got.PrivateIP.ValueString())
+	}
+}
+
+// TestInstanceResource_createFailsViaActivityLog verifies a FAILED VM.CREATE log
+// errors out (fast) regardless of the state field.
+func TestInstanceResource_createFailsViaActivityLog(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+		logs:    []instance.ActivityLog{{Action: "VM.CREATE", Status: "FAILED"}},
+	}
+	resp := createInstance(t, svc)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when VM.CREATE log is FAILED")
+	}
+}
+
 func TestInstanceResource_createFailsFastOnTerminalState(t *testing.T) {
 	// A terminal provisioning state errors immediately instead of blocking for the
 	// full create timeout.
@@ -232,6 +317,54 @@ func TestInstanceResource_createServiceError(t *testing.T) {
 	resp := createInstance(t, svc)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure")
+	}
+}
+
+// TestInstanceResource_createAttachesExistingNetwork verifies that setting
+// `network` sends networks:[slug] and NO network_plan (so no untracked network
+// is auto-created), and that assign_public_ip=false sets IsPublic=false.
+func TestInstanceResource_createAttachesExistingNetwork(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["assign_public_ip"] = tftypes.NewValue(tftypes.Bool, false)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if len(svc.createReq.Networks) != 1 || svc.createReq.Networks[0] != "app-net" {
+		t.Errorf("Networks = %v, want [app-net]", svc.createReq.Networks)
+	}
+	if svc.createReq.NetworkPlan != "" {
+		t.Errorf("NetworkPlan = %q, want empty (no auto-create)", svc.createReq.NetworkPlan)
+	}
+	if svc.createReq.IsPublic {
+		t.Error("IsPublic = true, want false (assign_public_ip=false)")
+	}
+}
+
+// TestInstanceResource_validateNetworkConflict verifies network + network_plan
+// together is rejected at plan time.
+func TestInstanceResource_validateNetworkConflict(t *testing.T) {
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithValidateConfig)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when both network and network_plan are set")
 	}
 }
 
@@ -341,6 +474,26 @@ func TestInstanceResource_updateResizeWhenStopped(t *testing.T) {
 
 // TestInstanceResource_resizeRestartsOnFailure verifies that a failed offering
 // change restarts a VM that was running, honoring the transparent-resize contract.
+// TestInstanceResource_resizeViaActivityLog verifies a resize completes when the
+// cached state never updates (stays "Running"), relying on the VM.ACTION log to
+// confirm each stop/change/start step. Without the log path this would hang.
+func TestInstanceResource_resizeViaActivityLog(t *testing.T) {
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
+	svc := &fakeInstanceService{got: vm, staleCache: true}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm1", "ci1.large", "hourly", "", nil)
+	resp := updateInstance(t, svc, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.stopCalled != 1 || svc.startCalled != 1 {
+		t.Errorf("stop=%d start=%d, want 1/1 (transparent resize stop+restart)", svc.stopCalled, svc.startCalled)
+	}
+	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
+		t.Errorf("ChangePlan not called with new plan: %+v", svc.changedPlan)
+	}
+}
+
 func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
 	svc := &fakeInstanceService{got: vm, waited: vm, changePlanErr: errors.New("offering change failed")}
@@ -371,6 +524,9 @@ func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 	}
 	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
 		t.Errorf("cleanup Delete called with %v, want [vm1-abc]", svc.deleted)
+	}
+	if len(svc.expunged) != 1 || !svc.expunged[0] {
+		t.Errorf("cleanup Delete expunge = %v, want [true]", svc.expunged)
 	}
 }
 
