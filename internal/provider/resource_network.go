@@ -11,6 +11,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/zsoftly/zcp-cli/pkg/api/acl"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/network"
 )
@@ -28,6 +29,7 @@ type networkServiceIface interface {
 
 type networkResource struct {
 	svc            networkServiceIface
+	aclSvc         aclServiceIface
 	defaultProject string
 }
 
@@ -41,6 +43,7 @@ type networkResourceModel struct {
 	CategorySlug  types.String `tfsdk:"category_slug"`
 	NetworkPlan   types.String `tfsdk:"network_plan"`
 	VPC           types.String `tfsdk:"vpc"`
+	ACL           types.String `tfsdk:"acl"`
 	BillingCycle  types.String `tfsdk:"billing_cycle"`
 	// Computed
 	Gateway  types.String   `tfsdk:"gateway"`
@@ -121,6 +124,10 @@ func (r *networkResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				MarkdownDescription: "VPC slug to create this as a subnet within. Omit for standalone isolated networks.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
+			"acl": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "ID of a `zcp_network_acl` to attach to this subnet (VPC subnets only). Updated in place. The API does not return the attached ACL ID on read, so it is preserved from state.",
+			},
 			"billing_cycle": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Required when `vpc` is set.",
@@ -164,6 +171,7 @@ func (r *networkResource) Configure(_ context.Context, req resource.ConfigureReq
 		return
 	}
 	r.svc = network.NewService(pd.Client)
+	r.aclSvc = acl.NewService(pd.Client)
 	r.defaultProject = pd.DefaultProject
 }
 
@@ -220,6 +228,17 @@ func (r *networkResource) Create(ctx context.Context, req resource.CreateRequest
 	model.CIDR = apiOrKeep(model.CIDR, net.CIDR)
 	model.Gateway = apiOrKeep(model.Gateway, net.Gateway)
 	model.Netmask = apiOrKeep(model.Netmask, net.Netmask)
+	// description is Optional+Computed: resolve to a known value so no unknown
+	// remains after apply when the user omits it.
+	model.Description = apiOrKeep(model.Description, net.Description)
+
+	// Attach a custom ACL (VPC subnets only) after creation.
+	if aclID := model.ACL.ValueString(); aclID != "" {
+		if err := r.aclSvc.ReplaceNetworkACL(ctx, net.Slug, aclID); err != nil {
+			resp.Diagnostics.AddError("Failed to attach ACL to network", err.Error())
+			return
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -292,6 +311,14 @@ func (r *networkResource) Update(ctx context.Context, req resource.UpdateRequest
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to update network", err.Error())
 		return
+	}
+
+	// Re-attach the ACL when it changes (in place).
+	if !model.ACL.Equal(state.ACL) && model.ACL.ValueString() != "" {
+		if err := r.aclSvc.ReplaceNetworkACL(ctx, state.ID.ValueString(), model.ACL.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Failed to attach ACL to network", err.Error())
+			return
+		}
 	}
 
 	// Merge: plan has the new name/description; preserve computed and write-only from state.

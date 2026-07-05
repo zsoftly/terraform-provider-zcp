@@ -11,7 +11,9 @@ Manages a ZCP virtual machine instance. Create **blocks until the instance reach
 The resource maps the CLI's instance operations to Terraform's declarative model:
 
 - **In-place updates:** `name` (display name), `plan` + `billing_cycle` (resize), `user_data` (change-startup-script), and `tags` (tag-create / tag-delete).
-- **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template change reprovisions the disk), and the other create-only inputs (`project`, `ssh_key`, `network_plan`, `storage_category`).
+- **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template change reprovisions the disk), and the other create-only inputs (`project`, `ssh_key`, `network`, `network_plan`, `assign_public_ip`, `storage_category`).
+
+**Networking.** Attach the instance to a network you manage with `network` (the slug of a `zcp_network`), or let the platform auto-create one with `network_plan`. They are mutually exclusive. Prefer `network`. `network_plan` auto-creates an isolated network Terraform does not track, so destroy leaves it behind. Set `assign_public_ip = false` for a private-only instance.
 
 **Power state is not managed by Terraform.** The provider reports the instance's runtime state (running/stopped) read-only in `state`. Running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize**. Changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, like changing an `aws_instance` `instance_type`. `tags` are optional.
 
@@ -21,13 +23,21 @@ Imperative, non-declarative CLI operations (`reboot`/`reset`, `change-password`,
 
 ~> **Note on write-only fields:** the create-only inputs are sent to the API on creation but are not all echoed back in a comparable form on refresh. They are preserved in Terraform state.
 
-~> **Public-platform requirement:** although `network_plan` and `storage_category` are schema-optional (private-cloud configurations may omit them), the public ZCP API **requires both** when creating an instance and returns a `422` validation error otherwise.
+~> **Public-platform requirement:** although the network attributes and `storage_category` are schema-optional (private-cloud configurations may omit them), the public ZCP API **requires** a network (`network` or `network_plan`) and `storage_category` when creating an instance and returns a `422` validation error otherwise.
 
 ## Example Usage
 
 ```terraform
 data "zcp_region" "yow" {
   slug = "yow-1"
+}
+
+resource "zcp_network" "app" {
+  name           = "app-net"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  network_plan   = "inet-yow"
+  billing_cycle  = "hourly"
 }
 
 resource "zcp_instance" "web" {
@@ -37,7 +47,7 @@ resource "zcp_instance" "web" {
   template         = "ubuntu-2404-lts"
   plan             = "ci1xs"
   billing_cycle    = "hourly"
-  network_plan     = "pnet-yow"
+  network          = zcp_network.app.id
   storage_category = "nvme"
   ssh_key          = "deploy-key"
 }
@@ -48,7 +58,7 @@ resource "zcp_instance" "web" {
 Create-only attributes the API does not return are supplied positionally in the import ID (slash-separated, trailing/empty segments allowed):
 
 ```shell
-terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>]'
+terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>]'
 ```
 
 `<slug>/<cloud_provider>/<region>/<template>` are required. `name`, `state` and the IPs come from the subsequent read.
@@ -68,7 +78,9 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 
 - `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
 - `ssh_key` (String) Name of an existing SSH key to attach for login (see `zcp_ssh_key`). Changing this forces replacement.
-- `network_plan` (String) Network plan slug (e.g. `pnet-yow`). Required by the public API. Run `zcp plan network` to list values. Changing this forces replacement.
+- `network` (String) Slug of an existing `zcp_network` to attach the instance to. Mutually exclusive with `network_plan`. Preferred: you manage the network, so `terraform destroy` leaves nothing behind. Changing this forces replacement.
+- `network_plan` (String) Network plan slug (e.g. `pnet-yow`) used to auto-create an isolated network. Mutually exclusive with `network`. Terraform does not manage the auto-created network and destroy does not remove it. Run `zcp plan network` to list values. Changing this forces replacement.
+- `assign_public_ip` (Boolean) Whether to assign a public IP. Defaults to `true`. Set to `false` for a private-only instance. Changing this forces replacement.
 - `storage_category` (String) Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Required by the public API. Changing this forces replacement.
 - `user_data` (String) Startup script content (cloud-init / bash). Updated in place via change-startup-script (takes effect on next boot).
 - `tags` (Map of String) Key/value tags applied via tag-create / tag-delete. **Write-only:** the API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.

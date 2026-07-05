@@ -102,3 +102,27 @@ func NewVolumeResourceWithService(svc volumeServiceIface) resource.Resource {
 func NewKubernetesClusterResourceWithService(svc kubernetesServiceIface) resource.Resource {
 	return &kubernetesClusterResource{svc: svc}
 }
+
+// NewNetworkACLResourceWithService creates a networkACLResource pre-wired with
+// the given service; available only in test binaries.
+func NewNetworkACLResourceWithService(svc aclServiceIface) resource.Resource {
+	return &networkACLResource{svc: svc}
+}
+
+// NewNetworkACLRuleResourceWithService creates a networkACLRuleResource pre-wired
+// with the given service; available only in test binaries.
+func NewNetworkACLRuleResourceWithService(svc aclServiceIface) resource.Resource {
+	return &networkACLRuleResource{svc: svc}
+}
+
+// NewNetworkResourceWithServices creates a networkResource pre-wired with the
+// given network and ACL services; available only in test binaries.
+func NewNetworkResourceWithServices(svc networkServiceIface, aclSvc aclServiceIface) resource.Resource {
+	return &networkResource{svc: svc, aclSvc: aclSvc}
+}
+
+// NewIPAssociationResourceWithService creates an ipAssociationResource pre-wired
+// with the given service; available only in test binaries.
+func NewIPAssociationResourceWithService(svc ipAssociationServiceIface) resource.Resource {
+	return &ipAssociationResource{svc: svc}
+}

@@ -19,6 +19,29 @@ import (
 var _ resource.Resource = &ipAddressResource{}
 var _ resource.ResourceWithConfigure = &ipAddressResource{}
 var _ resource.ResourceWithImportState = &ipAddressResource{}
+var _ resource.ResourceWithValidateConfig = &ipAddressResource{}
+
+// ValidateConfig enforces that at least one of vpc or network is set: the API
+// rejects an allocation with neither ("The vpc field is required when network is
+// not present"). An IP can be scoped to a VPC or to a standalone network.
+func (r *ipAddressResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model ipAddressResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	// Skip when either is unknown (e.g. a reference to a not-yet-created resource):
+	// it may resolve to a value at apply time.
+	if model.VPC.IsUnknown() || model.Network.IsUnknown() {
+		return
+	}
+	if model.VPC.IsNull() && model.Network.IsNull() {
+		resp.Diagnostics.AddError(
+			"Missing IP scope",
+			"One of `vpc` or `network` must be set: a public IP is acquired within a VPC or a standalone network.",
+		)
+	}
+}
 
 type ipAddressServiceIface interface {
 	Allocate(ctx context.Context, req ipaddress.CreateRequest) (*ipaddress.IPAddress, error)
@@ -155,12 +178,11 @@ func (r *ipAddressResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	model.ID = types.StringValue(ip.Slug)
-	if ip.IPAddress != "" {
-		model.IPAddress = types.StringValue(ip.IPAddress)
-	}
-	if ip.Type != "" {
-		model.Type = types.StringValue(ip.Type)
-	}
+	// ip_address and type are Computed: always resolve them to a known value (the
+	// API echo, or "" when the allocate response omits it) so no unknown remains
+	// after apply. Read repopulates them from the list on the next refresh.
+	model.IPAddress = types.StringValue(ip.IPAddress)
+	model.Type = types.StringValue(ip.Type)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 

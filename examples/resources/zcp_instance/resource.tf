@@ -10,16 +10,22 @@ resource "zcp_ssh_key" "deploy" {
   region     = data.zcp_region.yow.slug
 }
 
-# ── Basic instance ────────────────────────────────────────────────────────────
-# Create blocks until the instance reaches the Running state, at which point
-# private_ip and public_ip are populated in state.
+# ── Recommended: attach the instance to a network you manage ──────────────────
+# Create the network as a first-class resource and attach the instance to it with
+# `network`. Both are then cleaned up by `terraform destroy` with no orphans.
+# (Using `network_plan` instead auto-creates a network Terraform doesn't track.)
 #
-# Changing `plan` later resizes the instance: the provider transparently stops
-# it, changes the compute offering, and restarts it — no power management needed
-# (same as changing an aws_instance instance_type).
-#
-# On the public ZCP platform, network_plan and storage_category are required by
-# the API even though they are schema-optional (private-cloud configs may differ).
+# Create blocks until the instance reaches Running, at which point private_ip and
+# public_ip are populated. Changing `plan` later resizes in place (the provider
+# stops, changes the offering, and restarts — like changing an aws_instance type).
+resource "zcp_network" "app" {
+  name           = "app-net"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  network_plan   = "inet-yow"
+  billing_cycle  = "hourly"
+}
+
 resource "zcp_instance" "web" {
   name             = "web-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider
@@ -27,14 +33,17 @@ resource "zcp_instance" "web" {
   template         = "ubuntu-2404-lts"
   plan             = "ci1xs"
   billing_cycle    = "hourly"
-  network_plan     = "pnet-yow"
+  network          = zcp_network.app.id
   storage_category = "nvme"
   ssh_key          = zcp_ssh_key.deploy.name
+  assign_public_ip = true # set false for a private-only instance
 }
 
-# ── Instance with optional extras: user data and tags ─────────────────────────
-# tags are optional. Terraform does not manage the instance's power state — the
-# running/stopped status is reported read-only in `state`.
+# ── Convenience: auto-create a network with network_plan ──────────────────────
+# network_plan auto-creates an isolated network for the instance. It is simpler,
+# but the network is NOT managed by Terraform and is left behind on destroy —
+# prefer the `network` attribute above. tags are optional; power state is not
+# managed by Terraform (the running/stopped status is read-only in `state`).
 resource "zcp_instance" "app" {
   name             = "app-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider

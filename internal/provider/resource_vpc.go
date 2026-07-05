@@ -198,6 +198,9 @@ func (r *vpcResource) Create(ctx context.Context, req resource.CreateRequest, re
 	// no unknown values remain after apply. Status may be empty initially (VPC still
 	// provisioning) and populated after the next refresh.
 	model.Status = types.StringValue(v.Status)
+	// description is Optional+Computed: resolve it to a known value (the API echo,
+	// or "" when omitted) so no unknown remains after apply.
+	model.Description = apiOrKeep(model.Description, v.Description)
 	// Do NOT overwrite cidr from the API response: the API echoes it back in
 	// prefixed form (e.g. "10.7.0.1/24") while this attribute is the base address
 	// the user supplied ("10.7.0.1"). Overwriting produces an inconsistent-result

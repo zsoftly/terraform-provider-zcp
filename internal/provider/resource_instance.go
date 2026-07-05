@@ -10,6 +10,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -21,11 +22,13 @@ import (
 var _ resource.Resource = &instanceResource{}
 var _ resource.ResourceWithConfigure = &instanceResource{}
 var _ resource.ResourceWithImportState = &instanceResource{}
+var _ resource.ResourceWithValidateConfig = &instanceResource{}
 
 type instanceServiceIface interface {
 	Create(ctx context.Context, req instance.CreateRequest) (*instance.VirtualMachine, error)
 	Get(ctx context.Context, slug string) (*instance.VirtualMachine, error)
 	WaitForState(ctx context.Context, slug string, targetStates []string, pollInterval time.Duration) (*instance.VirtualMachine, error)
+	ActivityLogs(ctx context.Context, slug string) ([]instance.ActivityLog, error)
 	ChangeLabel(ctx context.Context, slug, name string) error
 	ChangePlan(ctx context.Context, slug string, req instance.ChangePlanRequest) (*instance.ActionResponse, error)
 	ChangeStartupScript(ctx context.Context, slug string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error)
@@ -71,7 +74,9 @@ type instanceResourceModel struct {
 	BillingCycle    types.String `tfsdk:"billing_cycle"`
 	Project         types.String `tfsdk:"project"`
 	SSHKey          types.String `tfsdk:"ssh_key"`
+	Network         types.String `tfsdk:"network"`
 	NetworkPlan     types.String `tfsdk:"network_plan"`
+	AssignPublicIP  types.Bool   `tfsdk:"assign_public_ip"`
 	StorageCategory types.String `tfsdk:"storage_category"`
 	UserData        types.String `tfsdk:"user_data"`
 	Tags            types.Map    `tfsdk:"tags"`
@@ -139,10 +144,20 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				MarkdownDescription: "Name of an existing SSH key to attach for login (see `zcp_ssh_key`). Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
+			"network": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Slug of an existing `zcp_network` to attach the instance to. Mutually exclusive with `network_plan`. Prefer this: the instance attaches to a network you manage, so `terraform destroy` leaves nothing behind. Changing this forces replacement.",
+				PlanModifiers:       requiresReplace,
+			},
 			"network_plan": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Network plan slug (e.g. `pnet-yow`). Required by the public API. Run `zcp plan network` to list values. Changing this forces replacement.",
+				MarkdownDescription: "Network plan slug (e.g. `pnet-yow`) used to auto-create an isolated network for the instance. Mutually exclusive with `network`. Note: the auto-created network is not managed by Terraform and is not removed on destroy — prefer `network` with an explicit `zcp_network`. Run `zcp plan network` to list values. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
+			},
+			"assign_public_ip": schema.BoolAttribute{
+				Optional:            true,
+				MarkdownDescription: "Whether to assign a public IP to the instance. Defaults to `true`. Set to `false` for a private-only instance. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.RequiresReplace()},
 			},
 			"storage_category": schema.StringAttribute{
 				Optional:            true,
@@ -214,6 +229,25 @@ func (r *instanceResource) applyVMState(model *instanceResourceModel, vm *instan
 	model.PublicIP = types.StringValue(instance.StringVal(vm.PublicIP))
 }
 
+// ValidateConfig enforces that `network` and `network_plan` are not both set:
+// `network` attaches to an existing network, `network_plan` auto-creates one, so
+// they are mutually exclusive.
+func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model instanceResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	networkSet := !model.Network.IsNull() && !model.Network.IsUnknown()
+	planSet := !model.NetworkPlan.IsNull() && !model.NetworkPlan.IsUnknown()
+	if networkSet && planSet {
+		resp.Diagnostics.AddError(
+			"Conflicting network configuration",
+			"`network` (attach to an existing network) and `network_plan` (auto-create a network) are mutually exclusive — set only one.",
+		)
+	}
+}
+
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var model instanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
@@ -238,6 +272,9 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		project = model.Project.ValueString()
 	}
 
+	// assign_public_ip defaults to true (current behaviour) when unset.
+	isPublic := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
+
 	createReq := instance.CreateRequest{
 		Name:            model.Name.ValueString(),
 		CloudProvider:   model.CloudProvider.ValueString(),
@@ -246,7 +283,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		BootSource:      "image",
 		Server:          "cloud-compute",
 		Template:        model.Template.ValueString(),
-		IsPublic:        true,
+		IsPublic:        isPublic,
 		NetworkType:     "Isolated",
 		Networks:        []string{},
 		BillingCycle:    model.BillingCycle.ValueString(),
@@ -256,7 +293,13 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Hostname:        model.Name.ValueString(),
 		Addons:          []string{},
 		StorageCategory: model.StorageCategory.ValueString(),
-		NetworkPlan:     model.NetworkPlan.ValueString(),
+	}
+	// Attach to an existing network when `network` is set (no untracked
+	// auto-created network); otherwise auto-create one from `network_plan`.
+	if net := model.Network.ValueString(); net != "" {
+		createReq.Networks = []string{net}
+	} else {
+		createReq.NetworkPlan = model.NetworkPlan.ValueString()
 	}
 	if sshKey := model.SSHKey.ValueString(); sshKey != "" {
 		createReq.SSHKey = &sshKey
@@ -431,7 +474,30 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 // create timeout.
 func (r *instanceResource) waitForRunning(ctx context.Context, slug string) (*instance.VirtualMachine, error) {
 	var latest *instance.VirtualMachine
-	err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+	err := pollUntilReady(ctx, 10*time.Second, func(ctx context.Context) (bool, error) {
+		// Primary signal: the VM.CREATE activity log. It reflects the CloudStack
+		// provisioning job and flips to SUCCESS when the VM is actually up
+		// (~2-3 min). The cached `state` field, by contrast, lags ~18 min before it
+		// syncs to "Running" (it only refreshes on a background sync or a UI view),
+		// so polling `state` would block for the full create timeout on a VM that
+		// is already running.
+		if logs, lerr := r.svc.ActivityLogs(ctx, slug); lerr == nil {
+			switch strings.ToUpper(createLogStatus(logs)) {
+			case "SUCCESS":
+				vm, gerr := r.svc.Get(ctx, slug)
+				if gerr != nil {
+					return false, gerr
+				}
+				// The state field is likely still the stale "Starting"; the log
+				// confirms the VM is up, so report it as Running.
+				vm.State = "Running"
+				latest = vm
+				return true, nil
+			case "FAILED", "ERROR":
+				return false, fmt.Errorf("instance provisioning failed (VM.CREATE activity log status: %s)", createLogStatus(logs))
+			}
+		}
+		// Fallback: if the activity log is unavailable, trust the state field.
 		vm, err := r.svc.Get(ctx, slug)
 		if err != nil {
 			return false, err
@@ -450,6 +516,68 @@ func (r *instanceResource) waitForRunning(ctx context.Context, slug string) (*in
 		return nil, err
 	}
 	return latest, nil
+}
+
+// createLogStatus returns the status of the VM.CREATE activity-log entry, or ""
+// if there is no such entry yet.
+func createLogStatus(logs []instance.ActivityLog) string {
+	for _, l := range logs {
+		if strings.EqualFold(l.Action, "VM.CREATE") {
+			return l.Status
+		}
+	}
+	return ""
+}
+
+// latestAction returns the status and created-at timestamp of the most recent
+// VM.ACTION activity-log entry — the result of a stop/start/reboot job. Logs are
+// newest-first, so the first match is the latest. Returns ("","") if none.
+func latestAction(logs []instance.ActivityLog) (status, createdAt string) {
+	for _, l := range logs {
+		if strings.EqualFold(l.Action, "VM.ACTION") {
+			return l.Status, l.CreatedAt
+		}
+	}
+	return "", ""
+}
+
+// latestActionTime returns the created-at of the newest VM.ACTION log, used as a
+// baseline captured before issuing a stop/start so a stale prior action is not
+// mistaken for the new one. Best effort: "" if the log is unavailable.
+func (r *instanceResource) latestActionTime(ctx context.Context, slug string) string {
+	logs, err := r.svc.ActivityLogs(ctx, slug)
+	if err != nil {
+		return ""
+	}
+	_, at := latestAction(logs)
+	return at
+}
+
+// waitForPowerState waits until the instance reaches targetState ("Stopped" or
+// "Running") after a stop/start. It prefers the VM.ACTION activity log — which
+// reflects the real CloudStack job and flips to SUCCESS promptly — over the
+// cached state field, which can lag many minutes. baselineAction is the newest
+// VM.ACTION timestamp from before the operation was issued, so only a newer
+// action counts. It is safe by construction: it also returns once the cached
+// state reaches the target, preserving correctness if the log is unavailable.
+func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetState, baselineAction string) error {
+	return pollUntilReady(ctx, 10*time.Second, func(ctx context.Context) (bool, error) {
+		if logs, lerr := r.svc.ActivityLogs(ctx, slug); lerr == nil {
+			if status, at := latestAction(logs); at != "" && at != baselineAction {
+				switch strings.ToUpper(status) {
+				case "SUCCESS":
+					return true, nil
+				case "FAILED", "ERROR":
+					return false, fmt.Errorf("instance failed to reach %s (VM.ACTION status: %s)", targetState, status)
+				}
+			}
+		}
+		vm, gerr := r.svc.Get(ctx, slug)
+		if gerr != nil {
+			return false, gerr
+		}
+		return strings.EqualFold(vm.State, targetState), nil
+	})
 }
 
 // cleanupAfterFailedCreate best-effort deletes an instance that was provisioned
@@ -479,10 +607,11 @@ func (r *instanceResource) resize(ctx context.Context, slug string, plan instanc
 	wasRunning := isRunning(vm.State)
 
 	if wasRunning {
+		base := r.latestActionTime(ctx, slug)
 		if _, err := r.svc.Stop(ctx, slug); err != nil {
 			return err
 		}
-		if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
+		if err := r.waitForPowerState(ctx, slug, "Stopped", base); err != nil {
 			return err
 		}
 	}
@@ -491,18 +620,20 @@ func (r *instanceResource) resize(ctx context.Context, slug string, plan instanc
 	if changeErr != nil {
 		// Restore the prior power state before surfacing the error.
 		if wasRunning {
+			base := r.latestActionTime(ctx, slug)
 			if _, serr := r.svc.Start(ctx, slug); serr == nil {
-				_, _ = r.svc.WaitForState(ctx, slug, []string{"Running"}, 0)
+				_ = r.waitForPowerState(ctx, slug, "Running", base)
 			}
 		}
 		return changeErr
 	}
 
 	if wasRunning {
+		base := r.latestActionTime(ctx, slug)
 		if _, err := r.svc.Start(ctx, slug); err != nil {
 			return err
 		}
-		if _, err := r.svc.WaitForState(ctx, slug, []string{"Running"}, 0); err != nil {
+		if err := r.waitForPowerState(ctx, slug, "Running", base); err != nil {
 			return err
 		}
 	}
@@ -512,6 +643,7 @@ func (r *instanceResource) resize(ctx context.Context, slug string, plan instanc
 // changeOffering performs the ChangePlan call and waits for the VM to settle in
 // Stopped (where a successful offering change leaves it).
 func (r *instanceResource) changeOffering(ctx context.Context, slug string, plan instanceResourceModel) error {
+	base := r.latestActionTime(ctx, slug)
 	if _, err := r.svc.ChangePlan(ctx, slug, instance.ChangePlanRequest{
 		Plan:         plan.Plan.ValueString(),
 		Slug:         slug,
@@ -520,10 +652,7 @@ func (r *instanceResource) changeOffering(ctx context.Context, slug string, plan
 	}); err != nil {
 		return err
 	}
-	if _, err := r.svc.WaitForState(ctx, slug, []string{"Stopped"}, 0); err != nil {
-		return err
-	}
-	return nil
+	return r.waitForPowerState(ctx, slug, "Stopped", base)
 }
 
 // mapToStringMap converts a (possibly null/unknown) types.Map of strings into a
@@ -614,7 +743,7 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 // come from the subsequent Read; tags cannot be imported (the API does not
 // return them).
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network_plan", "storage_category"}
+	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category"}
 	importPositional(ctx, req, resp, fields, 4,
-		"<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>]")
+		"<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>]")
 }

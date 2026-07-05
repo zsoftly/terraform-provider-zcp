@@ -151,8 +151,13 @@ func (r *volumeResource) ValidateConfig(ctx context.Context, req resource.Valida
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	planSet := !model.Plan.IsNull() && !model.Plan.IsUnknown()
-	sizeSet := !model.Size.IsNull() && !model.Size.IsUnknown()
+	// Skip when either is unknown (e.g. a reference to a not-yet-created value):
+	// it may resolve at apply time.
+	if model.Plan.IsUnknown() || model.Size.IsUnknown() {
+		return
+	}
+	planSet := !model.Plan.IsNull()
+	sizeSet := !model.Size.IsNull()
 	switch {
 	case planSet && sizeSet:
 		resp.Diagnostics.AddError(

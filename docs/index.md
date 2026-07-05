@@ -89,6 +89,6 @@ export ZCP_PROJECT="default"   # optional
 
 ### Optional
 
-- `bearer_token` (String, Sensitive) ZCP API bearer token. May also be set via `ZCP_BEARER_TOKEN`. Required. Set either the attribute or the environment variable.
+- `bearer_token` (String, Sensitive) ZCP API bearer token. Supply the token through this attribute or the `ZCP_BEARER_TOKEN` environment variable.
 - `api_url` (String) ZCP API base URL. Defaults to `https://api.zcp.zsoftly.ca/api`. May also be set via `ZCP_API_URL`.
 - `default_project` (String) Default project slug applied to resources that omit a project. May also be set via `ZCP_PROJECT`.
