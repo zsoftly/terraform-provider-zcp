@@ -20,18 +20,19 @@ import (
 
 // fakeInstanceService satisfies instanceServiceIface.
 type fakeInstanceService struct {
-	created   *instance.VirtualMachine
-	waited    *instance.VirtualMachine
-	got       *instance.VirtualMachine
-	logs      []instance.ActivityLog
-	createReq instance.CreateRequest
-	createErr error
-	waitErr   error
-	getErr    error
-	deleted   []string
-	expunged  []bool
-	deleteErr error
-	getCalls  int
+	created         *instance.VirtualMachine
+	waited          *instance.VirtualMachine
+	got             *instance.VirtualMachine
+	logs            []instance.ActivityLog
+	createReq       instance.CreateRequest
+	createErr       error
+	waitErr         error
+	getErr          error
+	deleted         []string
+	expunged        []bool
+	deletedPublicIP []bool
+	deleteErr       error
+	getCalls        int
 
 	// update-path capture
 	renamedTo     string
@@ -126,9 +127,10 @@ func (f *fakeInstanceService) Stop(_ context.Context, _ string) (*instance.Actio
 	}
 	return &instance.ActionResponse{}, nil
 }
-func (f *fakeInstanceService) Delete(_ context.Context, slug string, expunge bool) error {
+func (f *fakeInstanceService) Delete(_ context.Context, slug string, expunge, deletePublicIP bool) error {
 	f.deleted = append(f.deleted, slug)
 	f.expunged = append(f.expunged, expunge)
+	f.deletedPublicIP = append(f.deletedPublicIP, deletePublicIP)
 	return f.deleteErr
 }
 
@@ -528,6 +530,9 @@ func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 	if len(svc.expunged) != 1 || !svc.expunged[0] {
 		t.Errorf("cleanup Delete expunge = %v, want [true]", svc.expunged)
 	}
+	if len(svc.deletedPublicIP) != 1 || !svc.deletedPublicIP[0] {
+		t.Errorf("cleanup Delete deletePublicIP = %v, want [true]", svc.deletedPublicIP)
+	}
 }
 
 func TestInstanceResource_updateTags(t *testing.T) {
@@ -612,6 +617,11 @@ func TestInstanceResource_deleteHappyPath(t *testing.T) {
 	}
 	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
 		t.Errorf("Delete called with %v, want [vm1-abc]", svc.deleted)
+	}
+	// assign_public_ip is unset in state → defaults to true, so destroy must
+	// release the auto-assigned public IP rather than strand it.
+	if len(svc.deletedPublicIP) != 1 || !svc.deletedPublicIP[0] {
+		t.Errorf("Delete deletePublicIP = %v, want [true]", svc.deletedPublicIP)
 	}
 }
 

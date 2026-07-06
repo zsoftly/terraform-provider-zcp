@@ -36,7 +36,7 @@ type instanceServiceIface interface {
 	DeleteTag(ctx context.Context, slug string, key string) error
 	Start(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Stop(ctx context.Context, slug string) (*instance.ActionResponse, error)
-	Delete(ctx context.Context, slug string, expunge bool) error
+	Delete(ctx context.Context, slug string, expunge, deletePublicIP bool) error
 }
 
 // instanceService adapts the zcp-cli instance.Service, overriding the rename
@@ -324,7 +324,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
 	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
-		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
+		r.cleanupAfterFailedCreate(ctx, slug, isPublic, &resp.Diagnostics)
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
@@ -584,8 +584,8 @@ func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetSt
 // but cannot be saved to state because a later create step failed. A cleanup
 // failure is surfaced as a warning (the original error is reported by the caller)
 // so the user knows a manual delete may be needed.
-func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, diags *diag.Diagnostics) {
-	if err := r.svc.Delete(ctx, slug, true); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, deletePublicIP bool, diags *diag.Diagnostics) {
+	if err := r.svc.Delete(ctx, slug, true, deletePublicIP); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		diags.AddWarning(
 			"Orphaned instance not cleaned up",
 			fmt.Sprintf("instance %s was created but provisioning failed, and the cleanup delete also failed: %s. Delete it manually to avoid an orphan.", slug, err.Error()),
@@ -714,9 +714,14 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 	defer cancel()
 
 	slug := model.ID.ValueString()
+	// delete_public_ip releases the IP the API auto-assigned at create so destroy
+	// does not strand a billed address. Only set when this resource requested the
+	// auto-assignment (assign_public_ip defaults to true, mirroring Create) — an IP
+	// attached via zcp_ip_address/zcp_ip_association is owned by those resources.
+	deletePublicIP := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
 	// expunge=true forces an immediate purge so the slug does not linger in a
 	// soft-deleted state (which would otherwise make pollUntilGone time out).
-	err := r.svc.Delete(deleteCtx, slug, true)
+	err := r.svc.Delete(deleteCtx, slug, true, deletePublicIP)
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete instance", err.Error())
 		return

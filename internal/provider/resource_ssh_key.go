@@ -167,10 +167,10 @@ func (r *sshKeyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	for _, k := range keys {
 		if k.Slug == slug {
 			model.Name = types.StringValue(k.Name)
-			// PublicKey may not be returned by the API; preserve existing state value.
-			if k.PublicKey != "" {
-				model.PublicKey = types.StringValue(k.PublicKey)
-			}
+			// public_key is write-only: the API returns a normalized form (no
+			// trailing newline/comment) that never string-matches the config
+			// (e.g. file("key.pub")), which would otherwise plan a replacement
+			// on every refresh. Preserve the state value instead.
 			model.CreatedAt = types.StringValue(k.CreatedAt)
 			// project is write-only (not in API response); preserved from state.
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)

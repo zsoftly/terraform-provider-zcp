@@ -3,6 +3,8 @@
 package provider
 
 import (
+	"time"
+
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
@@ -29,6 +31,42 @@ func NewTemplateDataSourceWithLister(l templateLister) datasource.DataSource {
 // the given lister; available only in test binaries.
 func NewPlanDataSourceWithLister(l planLister) datasource.DataSource {
 	return &planDataSource{svc: l}
+}
+
+// NewStorageCategoryDataSourceWithLister creates a storageCategoryDataSource
+// pre-wired with the given lister; available only in test binaries.
+func NewStorageCategoryDataSourceWithLister(l storageCategoryLister) datasource.DataSource {
+	return &storageCategoryDataSource{svc: l}
+}
+
+// NewBillingCycleDataSourceWithLister creates a billingCycleDataSource
+// pre-wired with the given lister; available only in test binaries.
+func NewBillingCycleDataSourceWithLister(l billingCycleLister) datasource.DataSource {
+	return &billingCycleDataSource{svc: l}
+}
+
+// NewNetworkDataSourceWithLister creates a networkDataSource pre-wired with
+// the given lister; available only in test binaries.
+func NewNetworkDataSourceWithLister(l networkLister) datasource.DataSource {
+	return &networkDataSource{svc: l}
+}
+
+// NewVPCDataSourceWithLister creates a vpcDataSource pre-wired with the
+// given lister; available only in test binaries.
+func NewVPCDataSourceWithLister(l vpcLister) datasource.DataSource {
+	return &vpcDataSource{svc: l}
+}
+
+// NewSSHKeyDataSourceWithLister creates an sshKeyDataSource pre-wired with
+// the given lister; available only in test binaries.
+func NewSSHKeyDataSourceWithLister(l sshKeyLister) datasource.DataSource {
+	return &sshKeyDataSource{svc: l}
+}
+
+// NewKubernetesVersionDataSourceWithLister creates a kubernetesVersionDataSource
+// pre-wired with the given lister; available only in test binaries.
+func NewKubernetesVersionDataSourceWithLister(l kubernetesVersionLister) datasource.DataSource {
+	return &kubernetesVersionDataSource{svc: l}
 }
 
 // NewSSHKeyResourceWithService creates an sshKeyResource pre-wired with the
@@ -103,6 +141,16 @@ func NewKubernetesClusterResourceWithService(svc kubernetesServiceIface) resourc
 	return &kubernetesClusterResource{svc: svc}
 }
 
+// SetKubernetesPollIntervalForTest overrides Kubernetes polling intervals and
+// returns a restore function.
+func SetKubernetesPollIntervalForTest(d time.Duration) func() {
+	prev := kubernetesPollInterval
+	kubernetesPollInterval = d
+	return func() {
+		kubernetesPollInterval = prev
+	}
+}
+
 // NewNetworkACLResourceWithService creates a networkACLResource pre-wired with
 // the given service; available only in test binaries.
 func NewNetworkACLResourceWithService(svc aclServiceIface) resource.Resource {
@@ -125,4 +173,154 @@ func NewNetworkResourceWithServices(svc networkServiceIface, aclSvc aclServiceIf
 // with the given service; available only in test binaries.
 func NewIPAssociationResourceWithService(svc ipAssociationServiceIface) resource.Resource {
 	return &ipAssociationResource{svc: svc}
+}
+
+// NewEgressRuleResourceWithService creates an egressRuleResource pre-wired with
+// the given service; available only in test binaries.
+func NewEgressRuleResourceWithService(svc egressServiceIface) resource.Resource {
+	return &egressRuleResource{svc: svc}
+}
+
+// NewAffinityGroupResourceWithService creates an affinityGroupResource pre-wired
+// with the given service; available only in test binaries.
+func NewAffinityGroupResourceWithService(svc affinityGroupServiceIface) resource.Resource {
+	return &affinityGroupResource{svc: svc}
+}
+
+// NewDNSDomainResourceWithService creates a dnsDomainResource pre-wired with
+// the given service; available only in test binaries.
+func NewDNSDomainResourceWithService(svc dnsServiceIface) resource.Resource {
+	return &dnsDomainResource{svc: svc}
+}
+
+// NewDNSRecordResourceWithService creates a dnsRecordResource pre-wired with
+// the given service and deleter; available only in test binaries.
+func NewDNSRecordResourceWithService(svc dnsServiceIface, deleter dnsRecordDeleter) resource.Resource {
+	return &dnsRecordResource{svc: svc, deleter: deleter}
+}
+
+// NewLoadBalancerResourceWithService creates a loadBalancerResource pre-wired
+// with the given service; available only in test binaries.
+func NewLoadBalancerResourceWithService(svc loadBalancerServiceIface) resource.Resource {
+	return &loadBalancerResource{svc: svc}
+}
+
+// NewLoadBalancerRuleResourceWithService creates a loadBalancerRuleResource
+// pre-wired with the given service; available only in test binaries.
+func NewLoadBalancerRuleResourceWithService(svc loadBalancerServiceIface) resource.Resource {
+	return &loadBalancerRuleResource{svc: svc}
+}
+
+// NewLoadBalancerAttachmentResourceWithService creates a loadBalancerAttachmentResource
+// pre-wired with the given service; available only in test binaries.
+func NewLoadBalancerAttachmentResourceWithService(svc loadBalancerServiceIface) resource.Resource {
+	return &loadBalancerAttachmentResource{svc: svc}
+}
+
+// NewObjectStorageResourceWithService creates an objectStorageResource pre-wired
+// with the given service; available only in test binaries.
+func NewObjectStorageResourceWithService(svc objectStorageServiceIface) resource.Resource {
+	return &objectStorageResource{svc: svc}
+}
+
+// NewObjectStorageBucketResourceWithService creates an objectStorageBucketResource
+// pre-wired with the given service; available only in test binaries.
+func NewObjectStorageBucketResourceWithService(svc objectStorageServiceIface) resource.Resource {
+	return &objectStorageBucketResource{svc: svc}
+}
+
+// NewVMSnapshotResourceWithService creates a vmSnapshotResource pre-wired with
+// the given service; available only in test binaries.
+func NewVMSnapshotResourceWithService(svc vmSnapshotServiceIface) resource.Resource {
+	return &vmSnapshotResource{svc: svc}
+}
+
+// NewVMBackupResourceWithService creates a vmBackupResource pre-wired with
+// the given service; available only in test binaries.
+func NewVMBackupResourceWithService(svc vmBackupServiceIface) resource.Resource {
+	return &vmBackupResource{svc: svc}
+}
+
+// NewVolumeSnapshotResourceWithService creates a volumeSnapshotResource pre-wired
+// with the given service; available only in test binaries.
+func NewVolumeSnapshotResourceWithService(svc volumeSnapshotServiceIface) resource.Resource {
+	return &volumeSnapshotResource{svc: svc}
+}
+
+// NewVolumeBackupResourceWithService creates a volumeBackupResource pre-wired
+// with the given service; available only in test binaries.
+func NewVolumeBackupResourceWithService(svc volumeBackupServiceIface) resource.Resource {
+	return &volumeBackupResource{svc: svc}
+}
+
+// NewAutoscaleGroupResourceWithService creates an autoscaleGroupResource
+// pre-wired with the given service; available only in test binaries.
+func NewAutoscaleGroupResourceWithService(svc autoscaleServiceIface) resource.Resource {
+	return &autoscaleGroupResource{svc: svc}
+}
+
+// NewAutoscalePolicyResourceWithService creates a policy-kind autoscaleRuleResource
+// pre-wired with the given service; available only in test binaries.
+func NewAutoscalePolicyResourceWithService(svc autoscaleServiceIface) resource.Resource {
+	return &autoscaleRuleResource{svc: svc, kind: autoscalePolicyKind}
+}
+
+// NewAutoscaleConditionResourceWithService creates a condition-kind autoscaleRuleResource
+// pre-wired with the given service; available only in test binaries.
+func NewAutoscaleConditionResourceWithService(svc autoscaleServiceIface) resource.Resource {
+	return &autoscaleRuleResource{svc: svc, kind: autoscaleConditionKind}
+}
+
+// NewISOResourceWithService creates an isoResource pre-wired with the given
+// service; available only in test binaries.
+func NewISOResourceWithService(svc isoServiceIface) resource.Resource {
+	return &isoResource{svc: svc}
+}
+
+// NewAccountTemplateResourceWithService creates an accountTemplateResource
+// pre-wired with the given service; available only in test binaries.
+func NewAccountTemplateResourceWithService(svc accountTemplateServiceIface) resource.Resource {
+	return &accountTemplateResource{svc: svc}
+}
+
+// NewProjectResourceWithService creates a projectResource pre-wired with the
+// given service; available only in test binaries.
+func NewProjectResourceWithService(svc projectServiceIface) resource.Resource {
+	return &projectResource{svc: svc}
+}
+
+// NewSubUserResourceWithService creates a subUserResource pre-wired with the
+// given service; available only in test binaries.
+func NewSubUserResourceWithService(svc subUserServiceIface) resource.Resource {
+	return &subUserResource{svc: svc}
+}
+
+// NewRoleResourceWithService creates a roleResource pre-wired with the given
+// service; available only in test binaries.
+func NewRoleResourceWithService(svc roleServiceIface) resource.Resource {
+	return &roleResource{svc: svc}
+}
+
+// NewBudgetAlertResourceWithService creates a budgetAlertResource pre-wired
+// with the given service; available only in test binaries.
+func NewBudgetAlertResourceWithService(svc budgetAlertServiceIface) resource.Resource {
+	return &budgetAlertResource{svc: svc}
+}
+
+// NewRemoteAccessVPNResourceWithService creates a remoteAccessVPNResource
+// pre-wired with the given service; available only in test binaries.
+func NewRemoteAccessVPNResourceWithService(svc remoteAccessVPNServiceIface) resource.Resource {
+	return &remoteAccessVPNResource{svc: svc}
+}
+
+// NewInstanceDataSourceWithGetter creates an instanceDataSource pre-wired with
+// the given getter; available only in test binaries.
+func NewInstanceDataSourceWithGetter(g instanceGetter) datasource.DataSource {
+	return &instanceDataSource{svc: g}
+}
+
+// NewPermissionsDataSourceWithLister creates a permissionsDataSource pre-wired
+// with the given lister; available only in test binaries.
+func NewPermissionsDataSourceWithLister(l permissionLister) datasource.DataSource {
+	return &permissionsDataSource{svc: l}
 }

@@ -15,6 +15,8 @@ The resource maps the CLI's instance operations to Terraform's declarative model
 
 **Networking.** Attach the instance to a network you manage with `network` (the slug of a `zcp_network`), or let the platform auto-create one with `network_plan`. They are mutually exclusive. Prefer `network`. `network_plan` auto-creates an isolated network Terraform does not track, so destroy leaves it behind. Set `assign_public_ip = false` for a private-only instance.
 
+**Destroy releases the auto-assigned public IP.** When `assign_public_ip` is `true` (the default), the platform allocates a public IP at create time, and `terraform destroy` releases it with the instance so no billed address is left behind. An IP attached via `zcp_ip_address`/`zcp_ip_association` belongs to those resources and is untouched.
+
 **Power state is not managed by Terraform.** The provider reports the instance's runtime state (running/stopped) read-only in `state`. Running `apply` against a stopped or running instance produces no diff and never starts or stops it. The provider only stops and restarts the VM **internally during a resize**. Changing `plan` (and/or `billing_cycle`) stops the instance, changes its compute offering, and restarts it to its previous state, like changing an `aws_instance` `instance_type`. `tags` are optional.
 
 ~> **Hostname is set once at creation** (from `name`) and is not changed afterward. Only the display `name` is mutable. This matches how instance hostnames behave on EC2 and most clouds.
@@ -80,7 +82,7 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 - `ssh_key` (String) Name of an existing SSH key to attach for login (see `zcp_ssh_key`). Changing this forces replacement.
 - `network` (String) Slug of an existing `zcp_network` to attach the instance to. Mutually exclusive with `network_plan`. Preferred: you manage the network, so `terraform destroy` leaves nothing behind. Changing this forces replacement.
 - `network_plan` (String) Network plan slug (e.g. `pnet-yow`) used to auto-create an isolated network. Mutually exclusive with `network`. Terraform does not manage the auto-created network and destroy does not remove it. Run `zcp plan network` to list values. Changing this forces replacement.
-- `assign_public_ip` (Boolean) Whether to assign a public IP. Defaults to `true`. Set to `false` for a private-only instance. Changing this forces replacement.
+- `assign_public_ip` (Boolean) Whether to assign a public IP. Defaults to `true`. Set to `false` for a private-only instance. When `true`, destroy releases the auto-assigned IP with the instance. Changing this forces replacement.
 - `storage_category` (String) Storage category slug. Region-specific: `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Required by the public API. Changing this forces replacement.
 - `user_data` (String) Startup script content (cloud-init / bash). Updated in place via change-startup-script (takes effect on next boot).
 - `tags` (Map of String) Key/value tags applied via tag-create / tag-delete. **Write-only:** the API does not return tags on read, so they are tracked in state but not refreshed (no drift detection) and are not populated on import.
