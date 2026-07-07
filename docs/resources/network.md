@@ -62,9 +62,9 @@ null in state. Populate them in your configuration to avoid perpetual diffs.
 - `description` (String) Human-readable description.
 - `category_slug` (String) Network category slug. Not returned by the API after
   creation. Changes force replacement.
-- `acl` (String) ID of a `zcp_network_acl` to attach to this subnet (VPC subnets
-  only). Updated in place. The API does not return the attached ACL ID on read,
-  so it is preserved from state.
+- `acl` (String) ID of a `zcp_network_acl` to attach to the network. Only valid
+  for networks created inside a VPC. Updated in place. The API does not return
+  the attached ACL ID on read, so it is preserved from state.
 - `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts.
 
 ### Read-Only

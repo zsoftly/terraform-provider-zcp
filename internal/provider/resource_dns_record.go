@@ -194,7 +194,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 		resp.Diagnostics.AddError(
 			"DNS record did not appear after create",
-			fmt.Sprintf("record %s %s on domain %s was accepted but never showed up in the zone: %s. Record names must be relative (the backend appends the zone), so a fully qualified name is stored double-appended and never matches.", recType, model.Name.ValueString(), domainSlug, err),
+			fmt.Sprintf("record %s %s on domain %s was accepted but never showed up in the zone: %s. The resource is recorded as tainted, so the next apply replaces it.", recType, model.Name.ValueString(), domainSlug, err),
 		)
 		return
 	}
