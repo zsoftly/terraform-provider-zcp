@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -176,12 +177,18 @@ func (r *vmBackupResource) Create(ctx context.Context, req resource.CreateReques
 	project := r.projectOrDefault(model.Project)
 
 	// The create endpoint returns only an action acknowledgement, so capture the
-	// pre-create slugs and resolve the new backup from the list afterwards.
+	// pre-create slugs and resolve the new backup from the list afterwards. An
+	// incomplete before-set would misattribute a pre-existing backup, so a
+	// failed baseline list aborts the create.
 	before := map[string]bool{}
-	if existing, err := r.svc.List(ctx, region, project); err == nil {
-		for _, b := range existing {
-			before[b.Slug] = true
-		}
+	existing, err := r.svc.List(ctx, region, project)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to create VM backup",
+			fmt.Sprintf("listing existing backups before create failed, so a new backup could not be identified afterwards: %s", err))
+		return
+	}
+	for _, b := range existing {
+		before[b.Slug] = true
 	}
 
 	pseudoService := defaultVMBackupPseudoService
@@ -213,11 +220,26 @@ func (r *vmBackupResource) Create(ctx context.Context, req resource.CreateReques
 		if err != nil {
 			return false, err
 		}
+		// The list exposes no field comparable to the VM slug, so new entries
+		// are detected by diffing against the pre-create baseline. Binding is
+		// refused when several appear at once (e.g. parallel applies), because
+		// picking one arbitrarily could adopt another VM's backup.
+		var fresh []*vmbackup.VMBackup
 		for i := range backups {
 			if !before[backups[i].Slug] {
-				created = &backups[i]
-				return true, nil
+				fresh = append(fresh, &backups[i])
 			}
+		}
+		if len(fresh) > 1 {
+			slugs := make([]string, len(fresh))
+			for i, b := range fresh {
+				slugs[i] = b.Slug
+			}
+			return false, fmt.Errorf("%d new backups appeared (%s); cannot tell which one belongs to %s. Import the intended backup instead", len(fresh), strings.Join(slugs, ", "), model.VirtualMachine.ValueString())
+		}
+		if len(fresh) == 1 {
+			created = fresh[0]
+			return true, nil
 		}
 		return false, nil
 	}); err != nil {

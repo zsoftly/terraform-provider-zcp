@@ -6,7 +6,11 @@ description: |-
 
 # zcp_network_acl_rule
 
-Manages a single rule in a ZCP Network ACL. Rules are independent resources (like `aws_network_acl_rule` and `azurerm_network_security_rule`), so you can manage them individually or with `for_each`. `number`, `action`, `traffic_type`, `protocol`, `cidr_list`, the port range, and the ICMP fields are updated in place; changing `acl` or `vpc` forces replacement.
+Manages a single rule in a ZCP Network ACL. Rules are independent resources
+(like `aws_network_acl_rule` and `azurerm_network_security_rule`), so you can
+manage them individually or with `for_each`. `number`, `action`, `traffic_type`,
+`protocol`, `cidr_list`, the port range, and the ICMP fields are updated in
+place; changing `acl` or `vpc` forces replacement.
 
 ## Example Usage
 
@@ -36,8 +40,10 @@ terraform import zcp_network_acl_rule.https_in main-vpc/<acl-id>/<rule-id>
 
 ### Required
 
-- `vpc` (String) Slug of the `zcp_vpc` the ACL belongs to. Changing this forces replacement.
-- `acl` (String) ID of the `zcp_network_acl` this rule belongs to. Changing this forces replacement.
+- `vpc` (String) Slug of the `zcp_vpc` the ACL belongs to. Changing this forces
+  replacement.
+- `acl` (String) ID of the `zcp_network_acl` this rule belongs to. Changing this
+  forces replacement.
 - `number` (Number) Rule number (order/priority). Must be unique within the ACL.
 - `action` (String) Rule action: `allow` or `deny`.
 - `traffic_type` (String) Traffic direction: `ingress` or `egress`.

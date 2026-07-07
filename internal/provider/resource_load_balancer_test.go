@@ -27,9 +27,11 @@ type fakeLoadBalancerService struct {
 	rulesGone   []string
 	attachReqs  []loadbalancer.AttachVMRequest
 	detachedVMs []string
+	listProject string
 }
 
-func (f *fakeLoadBalancerService) List(_ context.Context, _, _ string) ([]loadbalancer.LoadBalancer, error) {
+func (f *fakeLoadBalancerService) List(_ context.Context, _, project string) ([]loadbalancer.LoadBalancer, error) {
+	f.listProject = project
 	return f.lbs, f.err
 }
 func (f *fakeLoadBalancerService) Create(_ context.Context, req loadbalancer.CreateRequest) (*loadbalancer.LoadBalancer, error) {
@@ -529,6 +531,31 @@ func TestLoadBalancerAttachmentResource_readRuleGoneRemoves(t *testing.T) {
 	}
 	if !readResp.State.Raw.IsNull() {
 		t.Error("expected state to be null after RemoveResource, got non-null")
+	}
+}
+
+func TestLoadBalancerAttachmentResource_readUsesProjectScope(t *testing.T) {
+	// Read must resolve the project the same way Create does; an unscoped
+	// list could miss the LB and wrongly drop the attachment from state.
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", Rules: []loadbalancer.Rule{{ID: "rule-1"}}},
+		},
+	}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithServiceAndProject(svc, "default-9")
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	readReq := resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), readReq, readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", readResp.Diagnostics)
+	}
+	if readResp.State.Raw.IsNull() {
+		t.Fatal("attachment was dropped from state although LB and rule exist")
+	}
+	if svc.listProject != "default-9" {
+		t.Errorf("List called with project %q, want %q (provider default)", svc.listProject, "default-9")
 	}
 }
 

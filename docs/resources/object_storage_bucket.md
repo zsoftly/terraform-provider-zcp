@@ -8,7 +8,9 @@ description: |-
 
 Manages a bucket in a `zcp_object_storage` store.
 
-~> Bucket contents, policies, versioning, and lifecycle settings are managed via the S3 API (e.g. the AWS or minio providers pointed at the store's endpoint with its `api_key`/`api_secret`), not by this resource.
+~> Bucket contents, policies, versioning, and lifecycle settings are managed via
+the S3 API (e.g. the AWS or minio providers pointed at the store's endpoint with
+its `api_key`/`api_secret`), not by this resource.
 
 ## Example Usage
 
@@ -31,8 +33,13 @@ terraform import zcp_object_storage_bucket.media assets-x1/media-b1
 
 ### Required
 
-- `object_storage` (String) Parent object storage slug. Changing this forces replacement.
+- `object_storage` (String) Parent object storage slug. Changing this forces
+  replacement.
 - `name` (String) Bucket name. Changing this forces replacement.
+
+### Optional
+
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

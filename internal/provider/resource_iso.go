@@ -100,17 +100,17 @@ func (r *isoResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 			"os_type_id": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system type ID. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"operating_system": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system name (e.g. `Ubuntu`). Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"operating_system_version": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system version (e.g. `24.04`). Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,

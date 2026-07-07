@@ -154,11 +154,14 @@ func TestAffinityGroupResource_createHappyPath(t *testing.T) {
 }
 
 func TestAffinityGroupResource_createResolvesSlugFromList(t *testing.T) {
-	// The create response has no slug; the resource must fall back to the list.
+	// The create response has no slug; the resource must fall back to the
+	// list, matching on name AND type so a same-named group of another type
+	// is never adopted.
 	svc := &fakeAffinityGroupService{
 		created: &affinitygroup.AffinityGroup{ID: "ag-uuid-1", Name: "web-anti"},
 		groups: []affinitygroup.AffinityGroup{
-			{Slug: "web-anti-x1y2", Name: "web-anti"},
+			{Slug: "web-anti-decoy", Name: "web-anti", Type: "host affinity"},
+			{Slug: "web-anti-x1y2", Name: "web-anti", Type: "host anti-affinity"},
 		},
 	}
 	resp := createAffinityGroup(t, svc, "web-anti", "host anti-affinity")

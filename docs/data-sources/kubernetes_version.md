@@ -6,7 +6,8 @@ description: |-
 
 # zcp_kubernetes_version (Data Source)
 
-Looks up an available Kubernetes version by slug or version string, for use with `zcp_kubernetes_cluster`.
+Looks up an available Kubernetes version by slug or version string, for use with
+`zcp_kubernetes_cluster`.
 
 ## Example Usage
 
@@ -26,7 +27,8 @@ resource "zcp_kubernetes_cluster" "main" {
 ### Optional
 
 - `slug` (String) Version slug. Exactly one of `slug` or `version` must be set.
-- `version` (String) Version string (e.g. `1.32.0`). Exactly one of `slug` or `version` must be set.
+- `version` (String) Version string (e.g. `1.32.0`). Exactly one of `slug` or
+  `version` must be set.
 
 ### Read-Only
 

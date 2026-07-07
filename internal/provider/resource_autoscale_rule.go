@@ -256,10 +256,14 @@ func (r *autoscaleRuleResource) Create(ctx context.Context, req resource.CreateR
 	}
 	if id == "" {
 		// The create response omitted the rule; resolve it from the group by
-		// matching all writable fields.
+		// matching all writable fields. Cooldown is compared only when it was
+		// configured, because the backend fills a default when it is omitted.
+		cooldownSet := !model.Cooldown.IsNull() && !model.Cooldown.IsUnknown()
 		if found := r.findRule(ctx, groupSlug, func(candidate autoscaleRule) bool {
 			return candidate.Name == rule.Name && candidate.Metric == rule.Metric &&
-				candidate.Operator == rule.Operator && candidate.Threshold == rule.Threshold
+				candidate.Operator == rule.Operator && candidate.Threshold == rule.Threshold &&
+				candidate.Duration == rule.Duration && candidate.ScaleAmount == rule.ScaleAmount &&
+				(!cooldownSet || candidate.Cooldown == rule.Cooldown)
 		}); found != nil {
 			id = found.ID
 		}

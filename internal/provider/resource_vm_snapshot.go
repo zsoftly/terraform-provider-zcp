@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -167,11 +168,17 @@ func (r *vmSnapshotResource) Create(ctx context.Context, req resource.CreateRequ
 
 	// The create endpoint returns only an action acknowledgement, so capture the
 	// pre-create slugs and resolve the new snapshot from the list afterwards.
+	// An incomplete before-set would misattribute a pre-existing snapshot, so
+	// a failed baseline list aborts the create.
 	before := map[string]bool{}
-	if existing, err := r.svc.List(ctx, region, project); err == nil {
-		for _, s := range existing {
-			before[s.Slug] = true
-		}
+	existing, err := r.svc.List(ctx, region, project)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to create VM snapshot",
+			fmt.Sprintf("listing existing snapshots before create failed, so a new snapshot could not be identified afterwards: %s", err))
+		return
+	}
+	for _, s := range existing {
+		before[s.Slug] = true
 	}
 
 	createReq := vmsnapshot.CreateRequest{
@@ -199,11 +206,27 @@ func (r *vmSnapshotResource) Create(ctx context.Context, req resource.CreateRequ
 		if err != nil {
 			return false, err
 		}
+		// New snapshots are detected by diffing against the pre-create
+		// baseline plus the requested name (the list exposes no field
+		// comparable to the VM slug). Binding is refused when several match at
+		// once (e.g. parallel applies with the same name), because picking one
+		// arbitrarily could adopt another VM's snapshot.
+		var fresh []*vmsnapshot.VMSnapshot
 		for i := range snaps {
 			if !before[snaps[i].Slug] && snaps[i].Name == name {
-				created = &snaps[i]
-				return true, nil
+				fresh = append(fresh, &snaps[i])
 			}
+		}
+		if len(fresh) > 1 {
+			slugs := make([]string, len(fresh))
+			for i, s := range fresh {
+				slugs[i] = s.Slug
+			}
+			return false, fmt.Errorf("%d new snapshots named %q appeared (%s); cannot tell which one belongs to %s. Import the intended snapshot instead", len(fresh), name, strings.Join(slugs, ", "), model.VirtualMachine.ValueString())
+		}
+		if len(fresh) == 1 {
+			created = fresh[0]
+			return true, nil
 		}
 		return false, nil
 	}); err != nil {

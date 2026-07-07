@@ -81,13 +81,17 @@ func (r *accountTemplateResource) Schema(ctx context.Context, _ resource.SchemaR
 			},
 			"url": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "HTTP(S) URL of the source image. Exactly one of `url` or `virtual_machine` must be set. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Computed:            true,
+				MarkdownDescription: "HTTP(S) URL of the source image. Exactly one of `url` or `virtual_machine` must be set. The provider reads it back from the API, so it survives import. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"virtual_machine": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Slug of an instance to capture the template from. Exactly one of `url` or `virtual_machine` must be set. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"cloud_provider": schema.StringAttribute{
 				Required:            true,
@@ -107,17 +111,17 @@ func (r *accountTemplateResource) Schema(ctx context.Context, _ resource.SchemaR
 			"os_type_id": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system type ID. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"operating_system": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system name (e.g. `Ubuntu`). Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"operating_system_version": schema.StringAttribute{
 				Optional:            true,
 				MarkdownDescription: "Operating system version (e.g. `24.04`). Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers:       []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
@@ -126,13 +130,21 @@ func (r *accountTemplateResource) Schema(ctx context.Context, _ resource.SchemaR
 			},
 			"format": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Image format (e.g. `QCOW2`). Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Computed:            true,
+				MarkdownDescription: "Image format (e.g. `QCOW2`). The provider reads it back from the API, so it survives import. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"password_enabled": schema.BoolAttribute{
 				Optional:            true,
-				MarkdownDescription: "Whether password reset is supported. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.RequiresReplace()},
+				Computed:            true,
+				MarkdownDescription: "Whether password reset is supported. The provider reads it back from the API, so it survives import. Changing this forces replacement.",
+				PlanModifiers: []planmodifier.Bool{
+					boolplanmodifier.RequiresReplace(),
+					boolplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"state": schema.StringAttribute{
 				Computed:            true,
@@ -168,8 +180,13 @@ func (r *accountTemplateResource) ValidateConfig(ctx context.Context, req resour
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	urlSet := !model.URL.IsNull() && !model.URL.IsUnknown()
-	vmSet := !model.VirtualMachine.IsNull() && !model.VirtualMachine.IsUnknown()
+	// An unknown value resolves at apply time, so exclusivity cannot be judged
+	// yet; skip rather than fail.
+	if model.URL.IsUnknown() || model.VirtualMachine.IsUnknown() {
+		return
+	}
+	urlSet := !model.URL.IsNull()
+	vmSet := !model.VirtualMachine.IsNull()
 	if urlSet == vmSet {
 		resp.Diagnostics.AddError(
 			"Invalid template source",
@@ -234,12 +251,36 @@ func (r *accountTemplateResource) Create(ctx context.Context, req resource.Creat
 		resp.Diagnostics.AddError("Failed to create account template", err.Error())
 		return
 	}
+	if created == nil || created.Slug == "" {
+		resp.Diagnostics.AddError("Failed to create account template",
+			fmt.Sprintf("the API accepted the create for %q but returned no template; check the account template list before retrying.", model.Name.ValueString()))
+		return
+	}
 
 	model.ID = types.StringValue(created.Slug)
 	if created.State != "" {
 		model.State = types.StringValue(created.State)
 	} else {
 		model.State = types.StringNull()
+	}
+	// url, format, and password_enabled are computed, so values the config
+	// omitted arrive unknown and must be resolved before state is written.
+	if model.URL.IsUnknown() {
+		if created.URL != "" {
+			model.URL = types.StringValue(created.URL)
+		} else {
+			model.URL = types.StringNull()
+		}
+	}
+	if model.Format.IsUnknown() {
+		if created.Format != "" {
+			model.Format = types.StringValue(created.Format)
+		} else {
+			model.Format = types.StringNull()
+		}
+	}
+	if model.PasswordEnabled.IsUnknown() {
+		model.PasswordEnabled = types.BoolValue(created.PasswordEnabled)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
@@ -271,6 +312,18 @@ func (r *accountTemplateResource) Read(ctx context.Context, req resource.ReadReq
 			if t.State != "" {
 				model.State = types.StringValue(t.State)
 			}
+			// Hydrate the API-returned write-once fields when state lacks them
+			// (after import), so the follow-up plan is clean. Non-null state
+			// values are never overwritten.
+			if model.URL.IsNull() && t.URL != "" {
+				model.URL = types.StringValue(t.URL)
+			}
+			if model.Format.IsNull() && t.Format != "" {
+				model.Format = types.StringValue(t.Format)
+			}
+			if model.PasswordEnabled.IsNull() {
+				model.PasswordEnabled = types.BoolValue(t.PasswordEnabled)
+			}
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 			return
 		}
@@ -278,8 +331,19 @@ func (r *accountTemplateResource) Read(ctx context.Context, req resource.ReadReq
 	resp.State.RemoveResource(ctx)
 }
 
-func (r *accountTemplateResource) Update(_ context.Context, _ resource.UpdateRequest, _ *resource.UpdateResponse) {
-	// All attributes are ForceNew; Terraform never invokes this method.
+// Update only runs for the adoption plan right after an import: the API never
+// returns virtual_machine, os_type_id, operating_system, or
+// operating_system_version, and their plan modifier downgrades the diff from
+// replacement to in-place when the prior value is null. Copying the plan into
+// state records the configured values; nothing is sent to the API. Every other
+// attribute change forces replacement, so Terraform never routes it here.
+func (r *accountTemplateResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var model accountTemplateResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
 func (r *accountTemplateResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {

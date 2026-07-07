@@ -6,7 +6,10 @@ description: |-
 
 # zcp_ip_address
 
-Allocates a public IP address into a VPC or network. The API has no update endpoint for IP addresses, so every change forces replacement. Bind the IP to an instance with `zcp_ip_association`, then open ports with `zcp_firewall_rule` or `zcp_port_forward`.
+Allocates a public IP address into a VPC or network. The API has no update
+endpoint for IP addresses, so every change forces replacement. Bind the IP to an
+instance with `zcp_ip_association`, then open ports with `zcp_firewall_rule` or
+`zcp_port_forward`.
 
 ## Example Usage
 
@@ -36,14 +39,20 @@ terraform import zcp_ip_address.web 1036521143
 
 ### Required
 
-- `plan` (String) Plan slug for the IP address (e.g. `public-ip-1`). Changing this forces replacement.
-- `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing this forces replacement.
+- `plan` (String) Plan slug for the IP address (e.g. `public-ip-1`). Changing
+  this forces replacement.
+- `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing
+  this forces replacement.
 
 ### Optional
 
-- `vpc` (String) VPC slug to associate with the IP. At least one of `vpc` or `network` must be set. Changing this forces replacement.
-- `network` (String) Network slug to associate with the IP. At least one of `vpc` or `network` must be set. Changing this forces replacement.
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
+- `vpc` (String) VPC slug to associate with the IP. At least one of `vpc` or
+  `network` must be set. Changing this forces replacement.
+- `network` (String) Network slug to associate with the IP. At least one of
+  `vpc` or `network` must be set. Changing this forces replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

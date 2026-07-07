@@ -6,7 +6,10 @@ description: |-
 
 # zcp_vpc_vpn_gateway
 
-Manages a site-to-site VPN gateway attached to a VPC. The gateway is the platform-side endpoint of an IPSec tunnel; pair it with a `zcp_vpn_customer_gateway` for the remote side. All attributes force replacement.
+Manages a site-to-site VPN gateway attached to a VPC. The gateway is the
+platform-side endpoint of an IPSec tunnel; pair it with a
+`zcp_vpn_customer_gateway` for the remote side. All attributes force
+replacement.
 
 ## Example Usage
 
@@ -29,6 +32,10 @@ terraform import zcp_vpc_vpn_gateway.main main-vpc/<gateway-slug>
 ### Required
 
 - `vpc` (String) Parent VPC slug. Changing this forces replacement.
+
+### Optional
+
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

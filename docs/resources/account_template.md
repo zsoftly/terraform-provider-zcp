@@ -6,7 +6,9 @@ description: |-
 
 # zcp_account_template
 
-Registers a custom template in the account catalogue, either from an image URL or captured from an existing instance. Templates are immutable, so every change forces replacement.
+Registers a custom template in the account catalogue, either from an image URL
+or captured from an existing instance. Templates are immutable, so every change
+forces replacement.
 
 ## Example Usage
 
@@ -29,26 +31,48 @@ Import using `<slug>/<region>/<cloud_provider>/<billing_cycle>[/<project>]`:
 terraform import zcp_account_template.golden_web golden-web-t1/yow-1/zsoftly/monthly
 ```
 
+The provider reads `url`, `format`, and `password_enabled` back from the API on
+the first refresh. The API never returns `virtual_machine`, `os_type_id`,
+`operating_system`, or `operating_system_version`, so the first apply after
+import records their configured values in state without replacing the template.
+Later changes to them force replacement as usual.
+
 ## Schema
 
 ### Required
 
 - `name` (String) Template display name. Changing this forces replacement.
-- `cloud_provider` (String) Cloud provider slug. Changing this forces replacement.
-- `region` (String) Region slug (e.g. `yow-1`). Changing this forces replacement.
-- `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing this forces replacement.
+- `cloud_provider` (String) Cloud provider slug. Changing this forces
+  replacement.
+- `region` (String) Region slug (e.g. `yow-1`). Changing this forces
+  replacement.
+- `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing
+  this forces replacement.
 
 ### Optional
 
-- `url` (String) HTTP(S) URL of the source image. Exactly one of `url` or `virtual_machine` must be set. Changing this forces replacement.
-- `virtual_machine` (String) Slug of an instance to capture the template from. Exactly one of `url` or `virtual_machine` must be set. Changing this forces replacement.
-- `description` (String) Human-readable description. Changing this forces replacement.
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
-- `os_type_id` (String) Operating system type ID. Changing this forces replacement.
-- `operating_system` (String) Operating system name. Changing this forces replacement.
-- `operating_system_version` (String) Operating system version. Changing this forces replacement.
-- `format` (String) Image format (e.g. `QCOW2`). Changing this forces replacement.
-- `password_enabled` (Boolean) Whether password reset is supported. Changing this forces replacement.
+- `url` (String) HTTP(S) URL of the source image. Exactly one of `url` or
+  `virtual_machine` must be set. The provider reads it back from the API, so it
+  survives import. Changing this forces replacement.
+- `virtual_machine` (String) Slug of an instance to capture the template from.
+  Exactly one of `url` or `virtual_machine` must be set. Changing this forces
+  replacement.
+- `description` (String) Human-readable description. Changing this forces
+  replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
+- `os_type_id` (String) Operating system type ID. Changing this forces
+  replacement.
+- `operating_system` (String) Operating system name. Changing this forces
+  replacement.
+- `operating_system_version` (String) Operating system version. Changing this
+  forces replacement.
+- `format` (String) Image format (e.g. `QCOW2`). The provider reads it back from
+  the API, so it survives import. Changing this forces replacement.
+- `password_enabled` (Boolean) Whether password reset is supported. The provider
+  reads it back from the API, so it survives import. Changing this forces
+  replacement.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

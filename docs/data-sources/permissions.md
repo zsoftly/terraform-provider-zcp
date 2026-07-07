@@ -6,7 +6,8 @@ description: |-
 
 # zcp_permissions (Data Source)
 
-Lists the permission catalog for building `zcp_role` resources, optionally filtered by category.
+Lists the permission catalog for building `zcp_role` resources, optionally
+filtered by category.
 
 ## Example Usage
 

@@ -6,7 +6,8 @@ description: |-
 
 # zcp_vpc (Data Source)
 
-Looks up an existing VPC by slug, for example to add tiers or ACLs to a VPC created outside Terraform.
+Looks up an existing VPC by slug, for example to add tiers or ACLs to a VPC
+created outside Terraform.
 
 ## Example Usage
 
@@ -31,7 +32,8 @@ resource "zcp_network_acl" "web" {
 ### Optional
 
 - `region` (String) Region slug to scope the lookup (e.g. `yow-1`).
-- `project` (String) Project slug to scope the lookup. Inherits from the provider `default_project` if omitted.
+- `project` (String) Project slug to scope the lookup. Inherits from the
+  provider `default_project` if omitted.
 
 ### Read-Only
 

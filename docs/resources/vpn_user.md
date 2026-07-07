@@ -6,7 +6,8 @@ description: |-
 
 # zcp_vpn_user
 
-Manages a remote access VPN user. The API has no update endpoint for VPN users, so every change forces replacement.
+Manages a remote access VPN user. The API has no update endpoint for VPN users,
+so every change forces replacement.
 
 ## Example Usage
 
@@ -36,13 +37,17 @@ terraform import zcp_vpn_user.alice <vpn-user-slug>
 ### Required
 
 - `username` (String) VPN username. Changing this forces replacement.
-- `password` (String, Sensitive) VPN user password. Write-only. Changing this forces replacement.
-- `cloud_provider` (String) Cloud provider slug. Read it from `data.zcp_region` instead of hardcoding. Changing this forces replacement.
+- `password` (String, Sensitive) VPN user password. Write-only. Changing this
+  forces replacement.
+- `cloud_provider` (String) Cloud provider slug. Read it from `data.zcp_region`
+  instead of hardcoding. Changing this forces replacement.
 - `region` (String) Region slug. Changing this forces replacement.
 
 ### Optional
 
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

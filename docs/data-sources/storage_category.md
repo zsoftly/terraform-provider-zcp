@@ -6,7 +6,8 @@ description: |-
 
 # zcp_storage_category (Data Source)
 
-Looks up a storage category by slug. Categories are region-specific (e.g. `nvme` in YOW, `pro-nvme` in YUL), so pass `region` to scope the lookup.
+Looks up a storage category by slug. Categories are region-specific (e.g. `nvme`
+in YOW, `pro-nvme` in YUL), so pass `region` to scope the lookup.
 
 ## Example Usage
 

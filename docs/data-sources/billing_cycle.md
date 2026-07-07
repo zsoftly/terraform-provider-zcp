@@ -6,7 +6,8 @@ description: |-
 
 # zcp_billing_cycle (Data Source)
 
-Looks up a billing cycle by slug, for use in resources requiring a `billing_cycle`.
+Looks up a billing cycle by slug, for use in resources requiring a
+`billing_cycle`.
 
 ## Example Usage
 

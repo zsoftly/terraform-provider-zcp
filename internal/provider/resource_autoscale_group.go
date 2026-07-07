@@ -242,12 +242,25 @@ func (r *autoscaleGroupResource) Create(ctx context.Context, req resource.Create
 		resp.Diagnostics.AddError("Failed to create autoscale group", err.Error())
 		return
 	}
+	if group == nil || group.Slug == "" {
+		resp.Diagnostics.AddError("Failed to create autoscale group",
+			fmt.Sprintf("the API accepted the create for %q but returned no group; check the autoscale group list before retrying.", model.Name.ValueString()))
+		return
+	}
 
 	// An explicit enabled=false disables the group right after create.
 	if !model.Enabled.IsNull() && !model.Enabled.IsUnknown() && !model.Enabled.ValueBool() {
 		if disabled, derr := r.svc.Disable(ctx, group.Slug); derr != nil {
-			resp.Diagnostics.AddWarning("Autoscale group created but not disabled",
+			// The group exists but is still enabled, which contradicts the
+			// plan. Persist its real state and error so Terraform marks it
+			// tainted and the next apply retries instead of recording a
+			// disabled group that is actually running.
+			model.Enabled = types.BoolValue(true)
+			applyGroupState(&model, group)
+			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+			resp.Diagnostics.AddError("Autoscale group created but not disabled",
 				fmt.Sprintf("group %s was created; the requested disable failed: %s", group.Slug, derr))
+			return
 		} else if disabled != nil && disabled.Slug != "" {
 			group = disabled
 		}

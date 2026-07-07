@@ -4,7 +4,9 @@ Thank you for your interest in terraform-provider-zcp.
 
 ## Reporting Issues
 
-Please use [GitHub Issues](https://github.com/zsoftly/terraform-provider-zcp/issues) to report bugs or request features.
+Please use
+[GitHub Issues](https://github.com/zsoftly/terraform-provider-zcp/issues) to
+report bugs or request features.
 
 When filing a bug report, include:
 
@@ -34,7 +36,8 @@ Before opening a pull request:
 
 ### Local Dev Override
 
-To load the provider from your local build instead of the registry, add a `dev_overrides` block to `~/.terraformrc`:
+To load the provider from your local build instead of the registry, add a
+`dev_overrides` block to `~/.terraformrc`:
 
 ```hcl
 provider_installation {
@@ -45,10 +48,16 @@ provider_installation {
 }
 ```
 
-Then run `make install` to build and place the binary, and `terraform init` in any example directory will pick it up.
+Then run `make install` to build and place the binary, and `terraform init` in
+any example directory will pick it up.
 
 ### zcp-cli Dependency
 
-This provider depends on `github.com/zsoftly/zcp-cli` for shared API client types. During local development, `go.mod` contains a `replace` directive pointing to `../zcp-cli`. Before cutting a release, update `go.mod` to pin a tagged release of `zcp-cli` and remove the `replace` directive.
+This provider depends on `github.com/zsoftly/zcp-cli` for shared API client
+types. During local development, `go.mod` contains a `replace` directive
+pointing to `../zcp-cli`. Before cutting a release, update `go.mod` to pin a
+tagged release of `zcp-cli` and remove the `replace` directive.
 
-> **Note:** `zcp-cli` currently exposes its API clients under `internal/`, which restricts cross-module imports. A future ticket will move the relevant packages to `pkg/api/` to make them importable here.
+> **Note:** `zcp-cli` currently exposes its API clients under `internal/`, which
+> restricts cross-module imports. A future ticket will move the relevant
+> packages to `pkg/api/` to make them importable here.

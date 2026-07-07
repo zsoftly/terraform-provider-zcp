@@ -6,7 +6,9 @@ description: |-
 
 # zcp_autoscale_group
 
-Manages a ZCP autoscale group. `plan`, `template`, and `enabled` update in place; other changes force replacement. Add scaling rules with `zcp_autoscale_policy` (scale up) and `zcp_autoscale_condition` (scale down).
+Manages a ZCP autoscale group. `plan`, `template`, and `enabled` update in
+place; other changes force replacement. Add scaling rules with
+`zcp_autoscale_policy` (scale up) and `zcp_autoscale_condition` (scale down).
 
 ## Example Usage
 
@@ -39,18 +41,27 @@ terraform import zcp_autoscale_group.web web-asg-a1/yow-1/zsoftly
 - `name` (String) Display name. Changing this forces replacement.
 - `plan` (String) Compute plan slug for scaled instances. Updated in place.
 - `template` (String) Template slug for scaled instances. Updated in place.
-- `min_instances` (Number) Minimum instance count. Changing this forces replacement.
-- `max_instances` (Number) Maximum instance count. Changing this forces replacement.
-- `zone` (String) Zone slug the group scales in. Changing this forces replacement.
-- `cloud_provider` (String) Cloud provider slug. Changing this forces replacement.
-- `region` (String) Region slug (e.g. `yow-1`). Changing this forces replacement.
+- `min_instances` (Number) Minimum instance count. Changing this forces
+  replacement.
+- `max_instances` (Number) Maximum instance count. Changing this forces
+  replacement.
+- `zone` (String) Zone slug the group scales in. Changing this forces
+  replacement.
+- `cloud_provider` (String) Cloud provider slug. Changing this forces
+  replacement.
+- `region` (String) Region slug (e.g. `yow-1`). Changing this forces
+  replacement.
 
 ### Optional
 
-- `cooldown_period` (Number) Cooldown in seconds between scaling actions. Changing this forces replacement.
-- `network` (String) Network slug scaled instances join. Changing this forces replacement.
+- `cooldown_period` (Number) Cooldown in seconds between scaling actions.
+  Changing this forces replacement.
+- `network` (String) Network slug scaled instances join. Changing this forces
+  replacement.
 - `enabled` (Boolean) Whether autoscaling is active. Toggled in place.
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
+- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts.
 
 ### Read-Only
 

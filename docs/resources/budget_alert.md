@@ -6,7 +6,9 @@ description: |-
 
 # zcp_budget_alert
 
-Manages the account's budget alert. The account has a single budget alert setting, so declare at most one of this resource. Destroy disables the alert without clearing the configured amounts.
+Manages the account's budget alert. The account has a single budget alert
+setting, so declare at most one of this resource. Destroy disables the alert
+without clearing the configured amounts.
 
 ## Example Usage
 
@@ -30,11 +32,13 @@ terraform import zcp_budget_alert.main budget-alert
 ### Required
 
 - `amount` (Number) Monthly budget amount in account currency. Updated in place.
-- `threshold` (Number) Alert threshold as a percentage of the budget (e.g. `80`). Updated in place.
+- `threshold` (Number) Alert threshold as a percentage of the budget (e.g.
+  `80`). Updated in place.
 
 ### Optional
 
-- `enabled` (Boolean) Whether the alert is active. Defaults to `true`. Updated in place.
+- `enabled` (Boolean) Whether the alert is active. Defaults to `true`. Updated
+  in place.
 
 ### Read-Only
 

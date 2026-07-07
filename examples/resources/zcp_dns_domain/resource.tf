@@ -1,10 +1,5 @@
-# DNS domains live in the account-level `default` region.
-data "zcp_region" "default" {
-  slug = "default"
-}
-
+# DNS is account-level: the dedicated DNS provider and its single `default`
+# region are applied automatically, so only the name is needed.
 resource "zcp_dns_domain" "example" {
-  name           = "example.com"
-  cloud_provider = data.zcp_region.default.cloud_provider
-  region         = data.zcp_region.default.slug
+  name = "example.com"
 }

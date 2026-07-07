@@ -15,9 +15,15 @@ import (
 	"github.com/zsoftly/zcp-cli/pkg/api/dns"
 )
 
-// defaultDNSProvider is sent when the config omits dns_provider; it matches the
-// platform's managed PowerDNS deployment (the only provider ZCP offers today).
-const defaultDNSProvider = "PowerDNS"
+// DNS create defaults. DNS is served by the dedicated "dns" cloud provider,
+// which has a single region ("default") and a PowerDNS backend — compute
+// regions are invalid for DNS (verified live 2026-07-05). The CLI applies the
+// same defaults.
+const (
+	defaultDNSProvider      = "PowerDNS"
+	defaultDNSCloudProvider = "dns"
+	defaultDNSRegion        = "default"
+)
 
 var _ resource.Resource = &dnsDomainResource{}
 var _ resource.ResourceWithConfigure = &dnsDomainResource{}
@@ -29,7 +35,6 @@ type dnsServiceIface interface {
 	Create(ctx context.Context, req dns.CreateDomainRequest) (*dns.Domain, error)
 	Delete(ctx context.Context, slug string) error
 	CreateRecord(ctx context.Context, domainSlug string, req dns.CreateRecordRequest) (*dns.Domain, error)
-	DeleteRecord(ctx context.Context, domainSlug string, recordID int) error
 }
 
 type dnsDomainResource struct {
@@ -72,17 +77,21 @@ func (r *dnsDomainResource) Schema(ctx context.Context, _ resource.SchemaRequest
 			},
 			"dns_provider": schema.StringAttribute{
 				Optional:            true,
+				Computed:            true,
 				MarkdownDescription: "DNS provider backing the zone. Defaults to `" + defaultDNSProvider + "`. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplace(),
+					stringplanmodifier.UseStateForUnknown(),
+				},
 			},
 			"cloud_provider": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Cloud provider slug (e.g. `zsoftly`). Changing this forces replacement.",
+				Optional:            true,
+				MarkdownDescription: "Cloud provider slug. Defaults to `" + defaultDNSCloudProvider + "`, the dedicated DNS provider; compute providers are invalid here. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"region": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Region slug (e.g. `yow-1`). Changing this forces replacement.",
+				Optional:            true,
+				MarkdownDescription: "Region slug. Defaults to `" + defaultDNSRegion + "`, the single DNS region; compute regions are invalid here. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"project": schema.StringAttribute{
@@ -144,13 +153,21 @@ func (r *dnsDomainResource) Create(ctx context.Context, req resource.CreateReque
 	if !model.DNSProvider.IsNull() && !model.DNSProvider.IsUnknown() {
 		dnsProvider = model.DNSProvider.ValueString()
 	}
+	cloudProvider := defaultDNSCloudProvider
+	if !model.CloudProvider.IsNull() && !model.CloudProvider.IsUnknown() {
+		cloudProvider = model.CloudProvider.ValueString()
+	}
+	region := defaultDNSRegion
+	if !model.Region.IsNull() && !model.Region.IsUnknown() {
+		region = model.Region.ValueString()
+	}
 
 	domain, err := r.svc.Create(ctx, dns.CreateDomainRequest{
 		Name:          model.Name.ValueString(),
 		Project:       project,
 		DNSProvider:   dnsProvider,
-		CloudProvider: model.CloudProvider.ValueString(),
-		Region:        model.Region.ValueString(),
+		CloudProvider: cloudProvider,
+		Region:        region,
 	})
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to create DNS domain", err.Error())
@@ -159,6 +176,9 @@ func (r *dnsDomainResource) Create(ctx context.Context, req resource.CreateReque
 
 	model.ID = types.StringValue(domain.Slug)
 	model.Status = types.BoolValue(domain.Status)
+	// dns_provider is computed, so the resolved value must be known in state;
+	// Read may later refresh it from the backend.
+	model.DNSProvider = types.StringValue(dnsProvider)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -233,13 +253,15 @@ func (r *dnsDomainResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 }
 
-// ImportState accepts a composite ID so the write-only region/cloud_provider/project
-// are seeded for a zero-diff plan after import. Format:
+// ImportState accepts a composite ID so the write-only scope fields are seeded
+// for a zero-diff plan after import. Format:
 //
-//	<slug>/<region>/<cloud_provider>[/<project>]
+//	<slug>[/<region>/<cloud_provider>/<project>]
 //
-// name, dns_provider, and status come from the subsequent Read.
+// Omit the optional fields when the config relies on the DNS defaults and the
+// provider default_project. name, dns_provider, and status come from the
+// subsequent Read.
 func (r *dnsDomainResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "region", "cloud_provider", "project"}
-	importPositional(ctx, req, resp, fields, 3, "<slug>/<region>/<cloud_provider>[/<project>]")
+	importPositional(ctx, req, resp, fields, 1, "<slug>[/<region>/<cloud_provider>/<project>]")
 }

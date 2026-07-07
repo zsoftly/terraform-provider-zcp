@@ -6,7 +6,8 @@ description: |-
 
 # zcp_remote_access_vpn
 
-Enables remote access VPN on a public IP address. Pair with `zcp_vpn_user` for the accounts allowed to connect. Destroy disables the VPN on the IP.
+Enables remote access VPN on a public IP address. Pair with `zcp_vpn_user` for
+the accounts allowed to connect. Destroy disables the VPN on the IP.
 
 ## Example Usage
 
@@ -35,7 +36,12 @@ terraform import zcp_remote_access_vpn.office 1036521143/<vpn-id>
 
 ### Required
 
-- `ip_address` (String) Public IP address slug the VPN is enabled on. Changing this forces replacement.
+- `ip_address` (String) Public IP address slug the VPN is enabled on. Changing
+  this forces replacement.
+
+### Optional
+
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

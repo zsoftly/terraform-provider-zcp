@@ -6,9 +6,11 @@ description: |-
 
 # zcp_project
 
-Manages a ZCP project. `name`, `description`, and `purpose` update in place. Deleting a project requires it to be empty of services.
+Manages a ZCP project. `name`, `description`, and `purpose` update in place.
+Deleting a project requires it to be empty of services.
 
-Adding users to a project (`zcp project user add`) has no removal API, so project membership stays a CLI operation.
+Adding users to a project (`zcp project user add`) has no removal API, so
+project membership stays a CLI operation.
 
 ## Example Usage
 
@@ -40,9 +42,16 @@ terraform import zcp_project.staging staging-p1
 
 ### Optional
 
-- `description` (String) Human-readable description. Updated in place when set. Removing it from configuration preserves the remote value because the API cannot clear it on update.
-- `purpose` (String) Project purpose. Updated in place when set. Removing it from configuration preserves the remote value because the API cannot clear it on update.
-- `icon` (String) Project icon identifier (see `zcp project icon list`). Defaults to `cloud-13`. Set at create time only; changing it forces replacement.
+- `description` (String) Human-readable description. Updated in place when set.
+  Removing it from configuration preserves the remote value because the API
+  cannot clear it on update.
+- `purpose` (String) Project purpose. Updated in place when set. Removing it
+  from configuration preserves the remote value because the API cannot clear it
+  on update.
+- `icon` (String) Project icon identifier (see `zcp project icon list`).
+  Defaults to `cloud-13`. Set at create time only; changing it forces
+  replacement.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

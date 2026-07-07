@@ -6,11 +6,16 @@ description: |-
 
 # zcp_network
 
-Manages a ZCP network. Networks provide L2/L3 connectivity for virtual machines within a region.
+Manages a ZCP network. Networks provide L2/L3 connectivity for virtual machines
+within a region.
 
-`cloud_provider`, `region`, `project`, and `category_slug` are immutable after creation. Changing any of these forces replacement. `name` and `description` can be updated in-place.
+`cloud_provider`, `region`, `project`, and `category_slug` are immutable after
+creation. Changing any of these forces replacement. `name` and `description` can
+be updated in-place.
 
-~> **Note on `category_slug`:** The ZCP API does not return this field after creation. It is preserved in Terraform state but cannot be verified on subsequent reads. Changes to this field force replacement.
+~> **Note on `category_slug`:** The ZCP API does not return this field after
+creation. It is preserved in Terraform state but cannot be verified on
+subsequent reads. Changes to this field force replacement.
 
 ## Example Usage
 
@@ -37,22 +42,30 @@ Import an existing network by its slug:
 terraform import zcp_network.app <slug>
 ```
 
-After import, `cloud_provider`, `region`, `project`, and `category_slug` will be null in state. Populate them in your configuration to avoid perpetual diffs.
+After import, `cloud_provider`, `region`, `project`, and `category_slug` will be
+null in state. Populate them in your configuration to avoid perpetual diffs.
 
 ## Schema
 
 ### Required
 
 - `name` (String) Display name for the network.
-- `cloud_provider` (String) Cloud provider slug (e.g. `nimbo`). Changing this forces replacement.
-- `region` (String) Region slug where the network is created. Changing this forces replacement.
+- `cloud_provider` (String) Cloud provider slug (e.g. `nimbo`). Changing this
+  forces replacement.
+- `region` (String) Region slug where the network is created. Changing this
+  forces replacement.
 
 ### Optional
 
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
 - `description` (String) Human-readable description.
-- `category_slug` (String) Network category slug. Not returned by the API after creation. Changes force replacement.
-- `acl` (String) ID of a `zcp_network_acl` to attach to this subnet (VPC subnets only). Updated in place. The API does not return the attached ACL ID on read, so it is preserved from state.
+- `category_slug` (String) Network category slug. Not returned by the API after
+  creation. Changes force replacement.
+- `acl` (String) ID of a `zcp_network_acl` to attach to this subnet (VPC subnets
+  only). Updated in place. The API does not return the attached ACL ID on read,
+  so it is preserved from state.
+- `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts.
 
 ### Read-Only
 

@@ -75,7 +75,12 @@ func (r *subUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				Required:            true,
 				Sensitive:           true,
 				MarkdownDescription: "Initial password (8+ characters with upper, lower, digit, and special character). Write-only. Changing this forces replacement.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				// The API never returns the password, so an imported user has a
+				// null prior value. Replacing only when a prior value exists
+				// lets the first apply after import adopt the configured
+				// password into state (the in-place update never sends it),
+				// while real password changes still replace.
+				PlanModifiers: []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"role": schema.StringAttribute{
 				Required:            true,
@@ -338,8 +343,10 @@ func (r *subUserResource) Delete(ctx context.Context, req resource.DeleteRequest
 	}
 }
 
-// ImportState uses the sub-user ID; password cannot be imported (write-only),
-// so set it in config before importing to avoid a replacement plan.
+// ImportState uses the sub-user ID. password cannot be imported (the API never
+// returns it); the first apply after import adopts the configured password
+// into state without replacing the user, because its RequiresReplaceIf only
+// fires when a prior value exists in state.
 func (r *subUserResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	resource.ImportStatePassthroughID(ctx, path.Root("id"), req, resp)
 }

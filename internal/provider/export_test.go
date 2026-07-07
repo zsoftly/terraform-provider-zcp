@@ -217,6 +217,12 @@ func NewLoadBalancerAttachmentResourceWithService(svc loadBalancerServiceIface) 
 	return &loadBalancerAttachmentResource{svc: svc}
 }
 
+// NewLoadBalancerAttachmentResourceWithServiceAndProject additionally wires a
+// provider-level default project; available only in test binaries.
+func NewLoadBalancerAttachmentResourceWithServiceAndProject(svc loadBalancerServiceIface, defaultProject string) resource.Resource {
+	return &loadBalancerAttachmentResource{svc: svc, defaultProject: defaultProject}
+}
+
 // NewObjectStorageResourceWithService creates an objectStorageResource pre-wired
 // with the given service; available only in test binaries.
 func NewObjectStorageResourceWithService(svc objectStorageServiceIface) resource.Resource {

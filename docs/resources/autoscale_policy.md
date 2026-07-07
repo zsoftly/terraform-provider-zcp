@@ -6,7 +6,9 @@ description: |-
 
 # zcp_autoscale_policy
 
-Manages a scale-up policy on a `zcp_autoscale_group`. All rule fields update in place; changing `autoscale_group` forces replacement. For scale-down rules use `zcp_autoscale_condition`.
+Manages a scale-up policy on a `zcp_autoscale_group`. All rule fields update in
+place; changing `autoscale_group` forces replacement. For scale-down rules use
+`zcp_autoscale_condition`.
 
 ## Example Usage
 
@@ -34,17 +36,21 @@ terraform import zcp_autoscale_policy.cpu_high web-asg-a1/11
 
 ### Required
 
-- `autoscale_group` (String) Parent autoscale group slug. Changing this forces replacement.
+- `autoscale_group` (String) Parent autoscale group slug. Changing this forces
+  replacement.
 - `name` (String) Rule name. Updated in place.
-- `metric` (String) Metric the rule evaluates (e.g. `cpu`, `memory`). Updated in place.
+- `metric` (String) Metric the rule evaluates (e.g. `cpu`, `memory`). Updated in
+  place.
 - `operator` (String) Comparison operator (e.g. `GT`, `LT`). Updated in place.
 - `threshold` (Number) Metric threshold triggering the rule. Updated in place.
-- `duration` (Number) Seconds the metric must breach the threshold before scaling. Updated in place.
+- `duration` (Number) Seconds the metric must breach the threshold before
+  scaling. Updated in place.
 - `scale_amount` (Number) Instances to add per scaling action. Updated in place.
 
 ### Optional
 
-- `cooldown` (Number) Cooldown in seconds after this rule fires. Updated in place.
+- `cooldown` (Number) Cooldown in seconds after this rule fires. Updated in
+  place.
 
 ### Read-Only
 

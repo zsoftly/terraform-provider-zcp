@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"fmt"
-	"net/url"
 	"strings"
 	"time"
 
@@ -16,7 +15,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/dns"
-	"github.com/zsoftly/zcp-cli/pkg/httpclient"
 )
 
 var _ resource.Resource = &dnsRecordResource{}
@@ -25,26 +23,11 @@ var _ resource.ResourceWithImportState = &dnsRecordResource{}
 
 // dnsRecordDeleter removes an RRset by name and type. The live DNS API models
 // records as PowerDNS RRsets without numeric IDs (verified 2026-07-05), so
-// deletion goes through DELETE /dns/domains/{slug}/records?name=<fqdn>&type=<type>
-// rather than the SDK's record_id-based DeleteRecord, which cannot work against
-// the live API.
+// deletion goes through the SDK's DeleteRecordByName rather than the
+// record_id-based DeleteRecord, which cannot work against the live API.
+// *dns.Service satisfies this interface as of zcp-cli v0.0.22.
 type dnsRecordDeleter interface {
 	DeleteRecordByName(ctx context.Context, domainSlug, fqdn, recType string) error
-}
-
-// clientDNSRecordDeleter implements dnsRecordDeleter over the shared HTTP client.
-type clientDNSRecordDeleter struct {
-	client *httpclient.Client
-}
-
-func (d *clientDNSRecordDeleter) DeleteRecordByName(ctx context.Context, domainSlug, fqdn, recType string) error {
-	q := url.Values{}
-	q.Set("name", fqdn)
-	q.Set("type", recType)
-	if err := d.client.Delete(ctx, "/dns/domains/"+domainSlug+"/records", q); err != nil {
-		return fmt.Errorf("deleting DNS record %s %s on domain %s: %w", recType, fqdn, domainSlug, err)
-	}
-	return nil
 }
 
 type dnsRecordResource struct {
@@ -131,16 +114,9 @@ func (r *dnsRecordResource) Configure(_ context.Context, req resource.ConfigureR
 		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *ProviderData, got %T.", req.ProviderData))
 		return
 	}
-	r.svc = dns.NewService(pd.Client)
-	r.deleter = &clientDNSRecordDeleter{client: pd.Client}
-}
-
-// canonicalFQDN builds the backend's stored record name: the relative name
-// joined to the zone with a trailing dot.
-func canonicalFQDN(relativeName, zoneName string) string {
-	name := strings.TrimSuffix(strings.TrimSpace(relativeName), ".")
-	zone := strings.TrimSuffix(strings.TrimSpace(zoneName), ".")
-	return strings.ToLower(name + "." + zone + ".")
+	svc := dns.NewService(pd.Client)
+	r.svc = svc
+	r.deleter = svc
 }
 
 // matchRecord reports whether a stored record matches the given fqdn and type.
@@ -193,7 +169,7 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		if serr != nil {
 			return false, serr
 		}
-		fqdn = canonicalFQDN(model.Name.ValueString(), domain.Name)
+		fqdn = dns.CanonicalRecordFQDN(model.Name.ValueString(), domain.Name)
 		for _, rec := range domain.Records {
 			if matchRecord(rec, fqdn, recType) {
 				if rec.TTL != 0 {
@@ -204,9 +180,21 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		}
 		return false, nil
 	}); err != nil {
+		// The create was accepted, so persist a partial state before erroring:
+		// Terraform then records the resource as tainted and the next apply
+		// destroys and recreates it instead of orphaning the record. Delete
+		// resolves a null fqdn from the domain on its own.
+		if fqdn != "" {
+			model.FQDN = types.StringValue(fqdn)
+			model.ID = types.StringValue(strings.ToUpper(recType) + "/" + fqdn)
+		} else {
+			model.FQDN = types.StringNull()
+			model.ID = types.StringValue(strings.ToUpper(recType) + "/" + strings.ToLower(model.Name.ValueString()))
+		}
+		resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 		resp.Diagnostics.AddError(
 			"DNS record did not appear after create",
-			fmt.Sprintf("record %s %s on domain %s was accepted but never showed up in the zone: %s", recType, model.Name.ValueString(), domainSlug, err),
+			fmt.Sprintf("record %s %s on domain %s was accepted but never showed up in the zone: %s. Record names must be relative (the backend appends the zone), so a fully qualified name is stored double-appended and never matches.", recType, model.Name.ValueString(), domainSlug, err),
 		)
 		return
 	}
@@ -239,7 +227,7 @@ func (r *dnsRecordResource) Read(ctx context.Context, req resource.ReadRequest, 
 	}
 
 	recType := model.Type.ValueString()
-	fqdn := canonicalFQDN(model.Name.ValueString(), domain.Name)
+	fqdn := dns.CanonicalRecordFQDN(model.Name.ValueString(), domain.Name)
 	for _, rec := range domain.Records {
 		if matchRecord(rec, fqdn, recType) {
 			if rec.TTL != 0 {
@@ -293,7 +281,7 @@ func (r *dnsRecordResource) Delete(ctx context.Context, req resource.DeleteReque
 			resp.Diagnostics.AddError("Failed to resolve DNS record for delete", serr.Error())
 			return
 		}
-		fqdn = canonicalFQDN(model.Name.ValueString(), domain.Name)
+		fqdn = dns.CanonicalRecordFQDN(model.Name.ValueString(), domain.Name)
 	}
 
 	err := r.deleter.DeleteRecordByName(deleteCtx, domainSlug, fqdn, recType)

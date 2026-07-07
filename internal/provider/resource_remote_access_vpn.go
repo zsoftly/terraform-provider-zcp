@@ -64,10 +64,12 @@ func (r *remoteAccessVPNResource) Schema(ctx context.Context, _ resource.SchemaR
 			"public_ip": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Public IP clients connect to.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"state": schema.StringAttribute{
 				Computed:            true,
 				MarkdownDescription: "Current state of the remote access VPN.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -207,7 +209,7 @@ func (r *remoteAccessVPNResource) Delete(ctx context.Context, req resource.Delet
 	ipSlug := model.IPAddress.ValueString()
 	vpnID := model.ID.ValueString()
 	err := r.svc.DisableRemoteAccessVPN(deleteCtx, ipSlug, vpnID)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to disable remote access VPN", err.Error())
 		return
 	}

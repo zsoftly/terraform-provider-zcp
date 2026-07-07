@@ -6,7 +6,8 @@ description: |-
 
 # zcp_ssh_key (Data Source)
 
-Looks up an existing SSH key by slug or name, for example to reference a key uploaded through the console.
+Looks up an existing SSH key by slug or name, for example to reference a key
+uploaded through the console.
 
 ## Example Usage
 
@@ -26,7 +27,8 @@ resource "zcp_instance" "web" {
 ### Optional
 
 - `slug` (String) SSH key slug. Exactly one of `slug` or `name` must be set.
-- `name` (String) SSH key display name. Exactly one of `slug` or `name` must be set.
+- `name` (String) SSH key display name. Exactly one of `slug` or `name` must be
+  set.
 
 ### Read-Only
 

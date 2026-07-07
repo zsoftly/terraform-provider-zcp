@@ -160,8 +160,13 @@ func (r *objectStorageResource) ValidateConfig(ctx context.Context, req resource
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	planSet := !model.Plan.IsNull() && !model.Plan.IsUnknown()
-	sizeSet := !model.SizeGB.IsNull() && !model.SizeGB.IsUnknown()
+	// An unknown value (e.g. from a variable or another resource) resolves at
+	// apply time, so exclusivity cannot be judged yet; skip rather than fail.
+	if model.Plan.IsUnknown() || model.SizeGB.IsUnknown() {
+		return
+	}
+	planSet := !model.Plan.IsNull()
+	sizeSet := !model.SizeGB.IsNull()
 	if planSet == sizeSet {
 		resp.Diagnostics.AddError(
 			"Invalid plan configuration",

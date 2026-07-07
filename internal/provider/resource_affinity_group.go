@@ -171,7 +171,9 @@ func (r *affinityGroupResource) Create(ctx context.Context, req resource.CreateR
 			return
 		}
 		for _, g := range groups {
-			if g.Name == model.Name.ValueString() {
+			// Names are not unique across types, so match both to avoid
+			// binding a same-named group of a different type.
+			if g.Name == createReq.Name && g.Type == createReq.Type {
 				slug = g.Slug
 				break
 			}

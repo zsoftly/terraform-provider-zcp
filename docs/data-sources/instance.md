@@ -6,7 +6,8 @@ description: |-
 
 # zcp_instance (Data Source)
 
-Looks up an existing instance by slug, for example to attach resources to an instance created outside Terraform.
+Looks up an existing instance by slug, for example to attach resources to an
+instance created outside Terraform.
 
 ## Example Usage
 

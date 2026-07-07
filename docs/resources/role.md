@@ -6,7 +6,9 @@ description: |-
 
 # zcp_role
 
-Manages a ZCP role. `permissions` is the full desired set; updates replace the role's existing permissions. Use the `zcp_permissions` data source to discover permission slugs.
+Manages a ZCP role. `permissions` is the full desired set; updates replace the
+role's existing permissions. Use the `zcp_permissions` data source to discover
+permission slugs.
 
 ## Example Usage
 
@@ -35,11 +37,15 @@ terraform import zcp_role.ops ops-r1
 ### Required
 
 - `name` (String) Role display name. Updated in place.
-- `permissions` (Set of String) Permission slugs granted by the role. Must contain at least one permission. The set replaces the role's permissions on update.
+- `permissions` (Set of String) Permission slugs granted by the role. Must
+  contain at least one permission. The set replaces the role's permissions on
+  update.
 
 ### Optional
 
-- `description` (String) Human-readable description. Updated in place; removing it clears the description.
+- `description` (String) Human-readable description. Updated in place; removing
+  it clears the description.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

@@ -6,7 +6,8 @@ description: |-
 
 # zcp_network (Data Source)
 
-Looks up an existing network by slug, for example to place instances into a network created outside Terraform.
+Looks up an existing network by slug, for example to place instances into a
+network created outside Terraform.
 
 ## Example Usage
 
@@ -31,7 +32,8 @@ resource "zcp_instance" "web" {
 ### Optional
 
 - `region` (String) Region slug to scope the lookup (e.g. `yow-1`).
-- `project` (String) Project slug to scope the lookup. Inherits from the provider `default_project` if omitted.
+- `project` (String) Project slug to scope the lookup. Inherits from the
+  provider `default_project` if omitted.
 
 ### Read-Only
 

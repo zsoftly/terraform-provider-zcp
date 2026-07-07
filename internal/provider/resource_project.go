@@ -174,6 +174,15 @@ func (r *projectResource) Create(ctx context.Context, req resource.CreateRequest
 	model.ID = types.StringValue(slug)
 	model.Purpose = types.StringValue(purpose)
 	model.Icon = types.StringValue(icon)
+	// description is computed, so an omitted value arrives unknown and must be
+	// resolved before the state is written.
+	if model.Description.IsUnknown() {
+		if created.Description != "" {
+			model.Description = types.StringValue(created.Description)
+		} else {
+			model.Description = types.StringNull()
+		}
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 

@@ -6,7 +6,9 @@ description: |-
 
 # zcp_plan
 
-Look up a ZCP service plan by slug. Use the `id` output to reference the plan in resource configurations. The `service` argument scopes the search to a specific service type (defaults to `Virtual Machine`).
+Look up a ZCP service plan by slug. Use the `id` output to reference the plan in
+resource configurations. The `service` argument scopes the search to a specific
+service type (defaults to `Virtual Machine`).
 
 ## Example Usage
 
@@ -32,7 +34,10 @@ output "plan_monthly" {
 
 ### Optional
 
-- `service` (String) Service type to search. Defaults to `Virtual Machine`. Accepted values: `Virtual Machine`, `Virtual Router`, `Block Storage`, `Load Balancer`, `Kubernetes`, `IP Address`, `VM Snapshot`, `My Template`, `ISO`, `Backups`.
+- `service` (String) Service type to search. Defaults to `Virtual Machine`.
+  Accepted values: `Virtual Machine`, `Virtual Router`, `Block Storage`,
+  `Load Balancer`, `Kubernetes`, `IP Address`, `VM Snapshot`, `My Template`,
+  `ISO`, `Backups`.
 
 ### Read-Only
 
