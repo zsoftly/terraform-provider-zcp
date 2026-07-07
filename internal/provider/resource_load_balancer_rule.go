@@ -154,21 +154,12 @@ func (r *loadBalancerRuleResource) Create(ctx context.Context, req resource.Crea
 	defer cancel()
 
 	lbSlug := model.LoadBalancer.ValueString()
-	spec := loadbalancer.CreateRuleSpec{
-		Name:            model.Name.ValueString(),
-		PublicPort:      model.PublicPort.ValueString(),
-		PrivatePort:     model.PrivatePort.ValueString(),
-		Protocol:        model.Protocol.ValueString(),
-		Algorithm:       model.Algorithm.ValueString(),
-		StickyMethod:    model.StickyMethod.ValueString(),
-		VirtualMachines: []loadbalancer.VMAttachment{},
-	}
-	if !model.EnableTLS.IsNull() && !model.EnableTLS.IsUnknown() {
-		spec.EnableTLSProtocol = model.EnableTLS.ValueBool()
-	}
-	if !model.EnableProxy.IsNull() && !model.EnableProxy.IsUnknown() {
-		spec.EnableProxyProtocol = model.EnableProxy.ValueBool()
-	}
+	spec := buildCreateRuleSpec(
+		model.Name.ValueString(),
+		model.PublicPort.ValueString(), model.PrivatePort.ValueString(),
+		model.Protocol.ValueString(), model.Algorithm.ValueString(),
+		model.StickyMethod.ValueString(), model.EnableTLS, model.EnableProxy,
+	)
 
 	if err := r.svc.CreateRule(ctx, lbSlug, loadbalancer.CreateRuleRequest{Rules: []loadbalancer.CreateRuleSpec{spec}}); err != nil {
 		resp.Diagnostics.AddError("Failed to create load balancer rule", err.Error())

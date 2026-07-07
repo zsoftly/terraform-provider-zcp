@@ -5,8 +5,10 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/autoscale"
 
@@ -19,6 +21,7 @@ type fakeAutoscaleService struct {
 	created           *autoscale.AutoscaleGroup
 	createReq         autoscale.CreateRequest
 	err               error
+	disableErr        error
 	deleted           []string
 	planChanges       []string
 	templateChanges   []string
@@ -61,6 +64,9 @@ func (f *fakeAutoscaleService) Enable(_ context.Context, _ string) (*autoscale.A
 }
 func (f *fakeAutoscaleService) Disable(_ context.Context, _ string) (*autoscale.AutoscaleGroup, error) {
 	f.disabled++
+	if f.disableErr != nil {
+		return nil, f.disableErr
+	}
 	return &autoscale.AutoscaleGroup{}, f.err
 }
 func (f *fakeAutoscaleService) CreatePolicy(_ context.Context, _ string, req autoscale.PolicyRequest) (*autoscale.Policy, error) {
@@ -127,6 +133,37 @@ func TestAutoscaleGroupResource_createHappyPath(t *testing.T) {
 	}
 	if svc.disabled != 0 {
 		t.Errorf("Disable called %d times on plain create, want 0", svc.disabled)
+	}
+}
+
+func TestAutoscaleGroupResource_createDisableFailureSurfaces(t *testing.T) {
+	// enabled=false disables right after create; when that disable fails the
+	// resource must error (tainting the group) and record it as still enabled
+	// rather than pretending the disable succeeded.
+	svc := &fakeAutoscaleService{
+		created: &autoscale.AutoscaleGroup{
+			Slug: "web-asg-a1", Name: "web-asg", State: "enabled",
+			Plan: "ci1xs", Template: "ubuntu-24", MinInstances: 1, MaxInstances: 5,
+			ZoneSlug: "yow-zone-1", CurrentCount: 1,
+		},
+		disableErr: errors.New("api down"),
+	}
+	r := internalprovider.NewAutoscaleGroupResourceWithService(svc)
+	cfg := autoscaleGroupConfig("")
+	cfg["enabled"] = tftypes.NewValue(tftypes.Bool, false)
+	resp := runCreate(t, r, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when the post-create disable fails, got none")
+	}
+	if resp.State.Raw.IsNull() {
+		t.Fatal("expected partial state so the group is tracked and tainted, got none")
+	}
+	var enabled types.Bool
+	if diags := resp.State.GetAttribute(context.Background(), path.Root("enabled"), &enabled); diags.HasError() {
+		t.Fatalf("reading enabled: %v", diags)
+	}
+	if enabled.IsNull() || !enabled.ValueBool() {
+		t.Errorf("state enabled = %v, want true (the group is really still enabled)", enabled)
 	}
 }
 

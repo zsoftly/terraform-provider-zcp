@@ -20,6 +20,7 @@ import (
 var _ resource.Resource = &egressRuleResource{}
 var _ resource.ResourceWithConfigure = &egressRuleResource{}
 var _ resource.ResourceWithImportState = &egressRuleResource{}
+var _ resource.ResourceWithValidateConfig = &egressRuleResource{}
 
 type egressServiceIface interface {
 	List(ctx context.Context, networkSlug string) ([]egress.EgressRule, error)
@@ -111,6 +112,27 @@ func (r *egressRuleResource) Schema(ctx context.Context, _ resource.SchemaReques
 	}
 }
 
+// ValidateConfig rejects protocols the API does not accept before the apply.
+func (r *egressRuleResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model egressRuleResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if model.Protocol.IsNull() || model.Protocol.IsUnknown() {
+		return
+	}
+	switch strings.ToLower(model.Protocol.ValueString()) {
+	case "tcp", "udp", "icmp", "all":
+	default:
+		resp.Diagnostics.AddAttributeError(
+			path.Root("protocol"),
+			"Invalid protocol",
+			fmt.Sprintf("%q is not a supported protocol. Use tcp, udp, icmp, or all.", model.Protocol.ValueString()),
+		)
+	}
+}
+
 func (r *egressRuleResource) Configure(_ context.Context, req resource.ConfigureRequest, resp *resource.ConfigureResponse) {
 	if req.ProviderData == nil {
 		return
@@ -169,12 +191,8 @@ func (r *egressRuleResource) Create(ctx context.Context, req resource.CreateRequ
 	}
 
 	model.ID = types.StringValue(rule.ID)
-	if rule.Status != "" {
-		model.State = types.StringValue(rule.Status)
-	} else {
-		// state is Computed; an unknown value after Create fails the apply.
-		model.State = types.StringNull()
-	}
+	// state is Computed; an unknown value after Create fails the apply.
+	model.State = stateOrNull(rule.Status)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 

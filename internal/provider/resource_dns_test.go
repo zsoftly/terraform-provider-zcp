@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -116,6 +117,26 @@ func createDNSDomain(t *testing.T, svc *fakeDNSService, name string) resource.Cr
 	}
 	r.Create(context.Background(), createReq, createResp)
 	return *createResp
+}
+
+func TestDNSDomainResource_createDefaultsDNSProvider(t *testing.T) {
+	// dns_provider is Optional+Computed with a PowerDNS default; when config
+	// omits it, Create must record the resolved value so state is never left
+	// unknown and later refreshes cannot flip it to a different value.
+	svc := &fakeDNSService{
+		created: &dns.Domain{Slug: "example-com", Name: "example.com", Status: true},
+	}
+	resp := createDNSDomain(t, svc, "example.com")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var provider types.String
+	if diags := resp.State.GetAttribute(context.Background(), path.Root("dns_provider"), &provider); diags.HasError() {
+		t.Fatalf("reading dns_provider: %v", diags)
+	}
+	if provider.ValueString() != "PowerDNS" {
+		t.Errorf("dns_provider = %q, want PowerDNS", provider.ValueString())
+	}
 }
 
 func readDNSDomain(t *testing.T, svc *fakeDNSService, id string) resource.ReadResponse {

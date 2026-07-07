@@ -521,6 +521,10 @@ func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.Upd
 	slug := state.ID.ValueString()
 	desired := int(model.Workers.ValueInt64())
 
+	// ready carries the freshest cluster read from whichever lifecycle action
+	// ran last, so computed fields are written from live data, not stale state.
+	var ready *kubernetes.Cluster
+
 	// Version upgrade first: upgrading nodes before resizing them keeps both
 	// operations independent, and the API rejects concurrent lifecycle actions.
 	if model.Version.ValueString() != state.Version.ValueString() {
@@ -540,13 +544,14 @@ func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.Upd
 			resp.Diagnostics.AddError("Failed to upgrade Kubernetes version", err.Error())
 			return
 		}
-		if _, err := r.waitForVersion(ctx, slug, target); err != nil {
+		upgraded, err := r.waitForVersion(ctx, slug, target)
+		if err != nil {
 			resp.Diagnostics.AddError("Kubernetes version upgrade did not complete", err.Error())
 			return
 		}
+		ready = upgraded
 	}
 
-	var ready *kubernetes.Cluster
 	if model.Plan.ValueString() != state.Plan.ValueString() {
 		if err := r.svc.Upgrade(ctx, slug, kubernetes.UpgradeRequest{
 			Plan:         model.Plan.ValueString(),

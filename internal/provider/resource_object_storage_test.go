@@ -357,3 +357,41 @@ func TestObjectStorageBucketResource_deleteHappyPath(t *testing.T) {
 		t.Errorf("DeleteBucket called with %v, want [media-b1]", svc.deletedBuckets)
 	}
 }
+
+func TestObjectStorageResource_validateConfig(t *testing.T) {
+	r := internalprovider.NewObjectStorageResource().(resource.ResourceWithValidateConfig)
+	var schResp resource.SchemaResponse
+	r.(resource.Resource).Schema(context.Background(), resource.SchemaRequest{}, &schResp)
+
+	run := func(planSlug string, sizeGB tftypes.Value) resource.ValidateConfigResponse {
+		raw := objectStorageRaw(t, schResp, "", nil, nil)
+		vals := map[string]tftypes.Value{}
+		if err := raw.As(&vals); err != nil {
+			t.Fatalf("decomposing raw: %v", err)
+		}
+		if planSlug != "" {
+			vals["plan"] = tftypes.NewValue(tftypes.String, planSlug)
+		}
+		vals["size_gb"] = sizeGB
+		tfType := schResp.Schema.Type().TerraformType(context.Background())
+		req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+		var resp resource.ValidateConfigResponse
+		r.ValidateConfig(context.Background(), req, &resp)
+		return resp
+	}
+
+	nullSize := tftypes.NewValue(tftypes.Number, nil)
+	if resp := run("", nullSize); !resp.Diagnostics.HasError() {
+		t.Error("neither plan nor size_gb set: want error, got none")
+	}
+	if resp := run("obj-100", tftypes.NewValue(tftypes.Number, 100)); !resp.Diagnostics.HasError() {
+		t.Error("both plan and size_gb set: want error, got none")
+	}
+	if resp := run("obj-100", nullSize); resp.Diagnostics.HasError() {
+		t.Errorf("plan only: unexpected error: %v", resp.Diagnostics)
+	}
+	// An unknown value resolves at apply time, so validation must not fail.
+	if resp := run("", tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)); resp.Diagnostics.HasError() {
+		t.Errorf("unknown size_gb: unexpected error: %v", resp.Diagnostics)
+	}
+}

@@ -27,10 +27,12 @@ type fakeLoadBalancerService struct {
 	rulesGone   []string
 	attachReqs  []loadbalancer.AttachVMRequest
 	detachedVMs []string
+	listRegion  string
 	listProject string
 }
 
-func (f *fakeLoadBalancerService) List(_ context.Context, _, project string) ([]loadbalancer.LoadBalancer, error) {
+func (f *fakeLoadBalancerService) List(_ context.Context, region, project string) ([]loadbalancer.LoadBalancer, error) {
+	f.listRegion = region
 	f.listProject = project
 	return f.lbs, f.err
 }
@@ -556,6 +558,9 @@ func TestLoadBalancerAttachmentResource_readUsesProjectScope(t *testing.T) {
 	}
 	if svc.listProject != "default-9" {
 		t.Errorf("List called with project %q, want %q (provider default)", svc.listProject, "default-9")
+	}
+	if svc.listRegion != "yow-1" {
+		t.Errorf("List called with region %q, want yow-1 (from state)", svc.listRegion)
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"time"
+	"unicode"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -13,13 +14,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/subuser"
 )
 
 var _ resource.Resource = &subUserResource{}
 var _ resource.ResourceWithConfigure = &subUserResource{}
 var _ resource.ResourceWithImportState = &subUserResource{}
+var _ resource.ResourceWithValidateConfig = &subUserResource{}
 
 type subUserServiceIface interface {
 	List(ctx context.Context) ([]subuser.SubUser, error)
@@ -106,6 +107,41 @@ func (r *subUserResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 				Delete: true,
 			}),
 		},
+	}
+}
+
+// ValidateConfig enforces the documented password complexity before the API
+// rejects it at apply time: 8+ characters with upper, lower, digit, and
+// special character.
+func (r *subUserResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model subUserResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if model.Password.IsNull() || model.Password.IsUnknown() {
+		return
+	}
+	pw := model.Password.ValueString()
+	var upper, lower, digit, special bool
+	for _, r := range pw {
+		switch {
+		case unicode.IsUpper(r):
+			upper = true
+		case unicode.IsLower(r):
+			lower = true
+		case unicode.IsDigit(r):
+			digit = true
+		default:
+			special = true
+		}
+	}
+	if len(pw) < 8 || !upper || !lower || !digit || !special {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("password"),
+			"Password does not meet complexity requirements",
+			"The password must be at least 8 characters and contain an uppercase letter, a lowercase letter, a digit, and a special character.",
+		)
 	}
 }
 
@@ -319,14 +355,14 @@ func (r *subUserResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 	id := model.ID.ValueString()
 	err := r.svc.Delete(deleteCtx, id)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !isBackendNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete sub-user", err.Error())
 		return
 	}
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
 		users, err := r.svc.List(ctx)
-		if apierrors.IsNotFound(err) {
+		if isBackendNotFound(err) {
 			return false, nil
 		}
 		if err != nil {

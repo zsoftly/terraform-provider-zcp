@@ -18,16 +18,18 @@ import (
 
 // fakeEgressService satisfies egressServiceIface.
 type fakeEgressService struct {
-	rules   []egress.EgressRule
-	created *egress.EgressRule
-	err     error
-	deleted []string
+	rules     []egress.EgressRule
+	created   *egress.EgressRule
+	createReq egress.CreateRequest
+	err       error
+	deleted   []string
 }
 
 func (f *fakeEgressService) List(_ context.Context, _ string) ([]egress.EgressRule, error) {
 	return f.rules, f.err
 }
-func (f *fakeEgressService) Create(_ context.Context, _ egress.CreateRequest) (*egress.EgressRule, error) {
+func (f *fakeEgressService) Create(_ context.Context, req egress.CreateRequest) (*egress.EgressRule, error) {
+	f.createReq = req
 	return f.created, f.err
 }
 func (f *fakeEgressService) Delete(_ context.Context, _ string, ruleID string) error {
@@ -225,5 +227,53 @@ func TestEgressRuleResource_delete404IsNoOp(t *testing.T) {
 	resp := deleteEgressRule(t, svc, "prod-net", "egress-uuid-1")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("404 on delete should be a no-op: %v", resp.Diagnostics)
+	}
+}
+
+func TestEgressRuleResource_createICMP(t *testing.T) {
+	svc := &fakeEgressService{created: &egress.EgressRule{ID: "er-icmp-1", Status: "Active"}}
+	r := internalprovider.NewEgressRuleResourceWithService(svc)
+	schResp := egressRuleSchema(t)
+	raw := egressRuleRaw(t, schResp, "", "prod-net-x1", "icmp", "0.0.0.0/0", "", "", "")
+	vals := map[string]tftypes.Value{}
+	if err := raw.As(&vals); err != nil {
+		t.Fatalf("decomposing raw: %v", err)
+	}
+	vals["icmp_type"] = tftypes.NewValue(tftypes.String, "8")
+	vals["icmp_code"] = tftypes.NewValue(tftypes.String, "0")
+	tfType := egressRuleTFType(t)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createReq.ICMPType != "8" || svc.createReq.ICMPCode != "0" {
+		t.Errorf("createReq ICMP = %q/%q, want 8/0", svc.createReq.ICMPType, svc.createReq.ICMPCode)
+	}
+	if svc.createReq.StartPort != "" || svc.createReq.EndPort != "" {
+		t.Errorf("createReq ports = %q/%q, want empty for ICMP", svc.createReq.StartPort, svc.createReq.EndPort)
+	}
+}
+
+func TestEgressRuleResource_validateConfigProtocol(t *testing.T) {
+	r := internalprovider.NewEgressRuleResourceWithService(nil).(resource.ResourceWithValidateConfig)
+	schResp := egressRuleSchema(t)
+
+	run := func(protocol string) resource.ValidateConfigResponse {
+		raw := egressRuleRaw(t, schResp, "", "prod-net-x1", protocol, "0.0.0.0/0", "", "", "")
+		req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: raw}}
+		var resp resource.ValidateConfigResponse
+		r.ValidateConfig(context.Background(), req, &resp)
+		return resp
+	}
+
+	for _, ok := range []string{"tcp", "udp", "icmp", "all", "TCP"} {
+		if resp := run(ok); resp.Diagnostics.HasError() {
+			t.Errorf("protocol %q rejected: %v", ok, resp.Diagnostics)
+		}
+	}
+	if resp := run("gre"); !resp.Diagnostics.HasError() {
+		t.Error("protocol gre accepted, want error")
 	}
 }

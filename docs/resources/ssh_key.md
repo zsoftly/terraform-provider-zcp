@@ -24,14 +24,17 @@ resource "zcp_ssh_key" "deploy" {
 
 ## Import
 
-Import an existing SSH key by its slug:
+Import using `<slug>/<region>[/<project>]`. Omit `<project>` when the config
+relies on the provider `default_project`:
 
 ```shell
-terraform import zcp_ssh_key.deploy <slug>
+terraform import zcp_ssh_key.deploy deploy-key-a1b2/yow-1
 ```
 
-After import, `project` will be null in state. Add it to your configuration if
-you need to track the project association.
+The API returns only a normalized form of the key material, so import leaves
+`public_key` unset. The first apply after import records the configured
+`public_key` in state without replacing the key. Later changes to it force
+replacement as usual.
 
 ## Schema
 

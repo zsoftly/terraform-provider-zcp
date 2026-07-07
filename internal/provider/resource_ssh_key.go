@@ -66,7 +66,12 @@ func (r *sshKeyResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 				Required:            true,
 				Sensitive:           true,
 				MarkdownDescription: "OpenSSH public key material.",
-				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				// The API returns only a normalized form of the key, so the
+				// config value is never refreshed from it and an imported key
+				// has a null prior value. Replacing only when a prior value
+				// exists lets the first apply after import adopt the configured
+				// key into state, while real key changes still replace.
+				PlanModifiers: []planmodifier.String{requiresReplaceUnlessAdopting()},
 			},
 			"region": schema.StringAttribute{
 				Required:            true,
@@ -180,8 +185,18 @@ func (r *sshKeyResource) Read(ctx context.Context, req resource.ReadRequest, res
 	resp.State.RemoveResource(ctx)
 }
 
-func (r *sshKeyResource) Update(_ context.Context, _ resource.UpdateRequest, _ *resource.UpdateResponse) {
-	// All attributes are ForceNew; Terraform never invokes this method.
+// Update only runs for the adoption plan right after an import: public_key is
+// write-only, and its plan modifier downgrades the diff from replacement to
+// in-place when the prior value is null. Copying the plan into state records
+// the configured key; nothing is sent to the API. Every other attribute change
+// forces replacement, so Terraform never routes it here.
+func (r *sshKeyResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
+	var model sshKeyResourceModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
 func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -235,8 +250,10 @@ func (r *sshKeyResource) Delete(ctx context.Context, req resource.DeleteRequest,
 //	<slug>/<region>[/<project>]
 //
 // Omit <project> (or leave it empty: "<slug>/<region>/") when the config relies
-// on the provider's default_project. name, public_key, and created_at are
-// populated by the subsequent Read.
+// on the provider's default_project. name and created_at come from the
+// subsequent Read. public_key cannot be imported (the API returns only a
+// normalized form); the first apply after import adopts the configured key
+// into state without replacing it.
 func (r *sshKeyResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "region", "project"}
 	importPositional(ctx, req, resp, fields, 2, "<slug>/<region>[/<project>]")

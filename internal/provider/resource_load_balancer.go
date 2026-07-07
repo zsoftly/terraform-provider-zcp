@@ -219,12 +219,23 @@ func (r *loadBalancerResource) ValidateConfig(ctx context.Context, req resource.
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	acquire := !model.AcquireNewIP.IsNull() && !model.AcquireNewIP.IsUnknown() && model.AcquireNewIP.ValueBool()
-	ipSet := !model.IPAddress.IsNull() && !model.IPAddress.IsUnknown()
+	if model.AcquireNewIP.IsUnknown() || model.IPAddress.IsUnknown() {
+		return
+	}
+	acquire := !model.AcquireNewIP.IsNull() && model.AcquireNewIP.ValueBool()
+	ipSet := !model.IPAddress.IsNull()
 	if acquire && ipSet {
 		resp.Diagnostics.AddError(
 			"Conflicting IP configuration",
-			"`acquire_new_ip = true` (allocate a fresh public IP) and `ip_address` (bind an existing public IP) are mutually exclusive — set only one.",
+			"`acquire_new_ip = true` (allocate a fresh public IP) and `ip_address` (bind an existing public IP) are mutually exclusive. Set only one.",
+		)
+	}
+	// An explicit acquire_new_ip = false promises an existing IP; without one
+	// the API rejects the create, so catch it at plan time.
+	if !model.AcquireNewIP.IsNull() && !model.AcquireNewIP.ValueBool() && !ipSet {
+		resp.Diagnostics.AddError(
+			"Missing IP configuration",
+			"`acquire_new_ip = false` requires `ip_address` to bind an existing public IP. Set `ip_address`, or remove `acquire_new_ip` to allocate a fresh one.",
 		)
 	}
 }
@@ -278,21 +289,12 @@ func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 	ctx, cancel := context.WithTimeout(ctx, createTimeout)
 	defer cancel()
 
-	ruleSpec := loadbalancer.CreateRuleSpec{
-		Name:            model.RuleName.ValueString(),
-		PublicPort:      model.PublicPort.ValueString(),
-		PrivatePort:     model.PrivatePort.ValueString(),
-		Protocol:        model.Protocol.ValueString(),
-		Algorithm:       model.Algorithm.ValueString(),
-		StickyMethod:    model.StickyMethod.ValueString(),
-		VirtualMachines: []loadbalancer.VMAttachment{},
-	}
-	if !model.EnableTLS.IsNull() && !model.EnableTLS.IsUnknown() {
-		ruleSpec.EnableTLSProtocol = model.EnableTLS.ValueBool()
-	}
-	if !model.EnableProxy.IsNull() && !model.EnableProxy.IsUnknown() {
-		ruleSpec.EnableProxyProtocol = model.EnableProxy.ValueBool()
-	}
+	ruleSpec := buildCreateRuleSpec(
+		model.RuleName.ValueString(),
+		model.PublicPort.ValueString(), model.PrivatePort.ValueString(),
+		model.Protocol.ValueString(), model.Algorithm.ValueString(),
+		model.StickyMethod.ValueString(), model.EnableTLS, model.EnableProxy,
+	)
 	if !model.VirtualMachines.IsNull() && !model.VirtualMachines.IsUnknown() {
 		var vms []string
 		resp.Diagnostics.Append(model.VirtualMachines.ElementsAs(ctx, &vms, false)...)

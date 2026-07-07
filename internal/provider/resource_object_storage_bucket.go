@@ -112,6 +112,11 @@ func (r *objectStorageBucketResource) Create(ctx context.Context, req resource.C
 		resp.Diagnostics.AddError("Failed to create bucket", err.Error())
 		return
 	}
+	if bucket == nil || bucket.Slug == "" {
+		resp.Diagnostics.AddError("Failed to create bucket",
+			fmt.Sprintf("the API accepted the create for %q but returned no bucket; check the bucket list before retrying.", model.Name.ValueString()))
+		return
+	}
 
 	model.ID = types.StringValue(bucket.Slug)
 	if bucket.Status != "" {

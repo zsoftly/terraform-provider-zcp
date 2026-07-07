@@ -51,6 +51,9 @@ func isoConfig(id string) map[string]tftypes.Value {
 		"cloud_provider": strVal("zsoftly"),
 		"region":         strVal("yow-1"),
 		"billing_cycle":  strVal("hourly"),
+		// The framework applies the schema default at plan time; these tests
+		// invoke the resource directly, so the defaulted value is set here.
+		"is_bootable": tftypes.NewValue(tftypes.Bool, true),
 	}
 	if id != "" {
 		cfg["id"] = strVal(id)
@@ -70,7 +73,7 @@ func TestISOResource_createHappyPath(t *testing.T) {
 	if got := stateID(t, resp.State); got != "rescue-iso-i1" {
 		t.Errorf("ID = %q, want rescue-iso-i1", got)
 	}
-	// is_bootable defaults to true when unset.
+	// is_bootable carries a schema default of true (simulated in isoConfig).
 	if !svc.createReq.IsBootable {
 		t.Error("createReq.IsBootable = false, want true (default)")
 	}
@@ -228,5 +231,47 @@ func TestAccountTemplateResource_deleteHappyPath(t *testing.T) {
 	}
 	if len(svc.deleted) != 1 || svc.deleted[0] != "golden-web-t1" {
 		t.Errorf("DeleteAccount called with %v, want [golden-web-t1]", svc.deleted)
+	}
+}
+
+func TestAccountTemplateResource_validateConfigSource(t *testing.T) {
+	r := internalprovider.NewAccountTemplateResourceWithService(nil).(resource.ResourceWithValidateConfig)
+	var schResp resource.SchemaResponse
+	r.(resource.Resource).Schema(context.Background(), resource.SchemaRequest{}, &schResp)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+
+	run := func(mutate func(map[string]tftypes.Value)) resource.ValidateConfigResponse {
+		raw := accountTemplateConfig("")
+		_, full := rawFor(t, r.(resource.Resource), raw)
+		vals := map[string]tftypes.Value{}
+		if err := full.As(&vals); err != nil {
+			t.Fatalf("decomposing raw: %v", err)
+		}
+		mutate(vals)
+		req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+		var resp resource.ValidateConfigResponse
+		r.ValidateConfig(context.Background(), req, &resp)
+		return resp
+	}
+
+	// accountTemplateConfig sets virtual_machine only: the valid single-source case.
+	if resp := run(func(_ map[string]tftypes.Value) {}); resp.Diagnostics.HasError() {
+		t.Errorf("virtual_machine only: unexpected error: %v", resp.Diagnostics)
+	}
+	if resp := run(func(v map[string]tftypes.Value) {
+		v["url"] = tftypes.NewValue(tftypes.String, "https://mirror.example.com/img.qcow2")
+	}); !resp.Diagnostics.HasError() {
+		t.Error("both url and virtual_machine set: want error, got none")
+	}
+	if resp := run(func(v map[string]tftypes.Value) {
+		v["virtual_machine"] = tftypes.NewValue(tftypes.String, nil)
+	}); !resp.Diagnostics.HasError() {
+		t.Error("neither url nor virtual_machine set: want error, got none")
+	}
+	// An unknown value resolves at apply time, so validation must not fail.
+	if resp := run(func(v map[string]tftypes.Value) {
+		v["url"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	}); resp.Diagnostics.HasError() {
+		t.Errorf("unknown url: unexpected error: %v", resp.Diagnostics)
 	}
 }

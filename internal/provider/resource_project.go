@@ -13,7 +13,6 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringdefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/project"
 )
 
@@ -286,14 +285,14 @@ func (r *projectResource) Delete(ctx context.Context, req resource.DeleteRequest
 
 	slug := model.ID.ValueString()
 	err := r.svc.Delete(deleteCtx, slug)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !isBackendNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete project", err.Error())
 		return
 	}
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
 		projects, err := r.svc.List(ctx)
-		if apierrors.IsNotFound(err) {
+		if isBackendNotFound(err) {
 			return false, nil
 		}
 		if err != nil {

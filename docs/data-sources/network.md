@@ -12,9 +12,13 @@ network created outside Terraform.
 ## Example Usage
 
 ```terraform
+data "zcp_region" "yow" {
+  slug = "yow-1"
+}
+
 data "zcp_network" "prod" {
   slug   = "prod-net"
-  region = "yow-1"
+  region = data.zcp_region.yow.slug
 }
 
 resource "zcp_instance" "web" {

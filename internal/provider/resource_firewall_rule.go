@@ -159,12 +159,8 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 	}
 
 	model.ID = types.StringValue(rule.ID)
-	if rule.State != "" {
-		model.State = types.StringValue(rule.State)
-	} else {
-		// state is Computed; an unknown value after Create fails the apply.
-		model.State = types.StringNull()
-	}
+	// state is Computed; an unknown value after Create fails the apply.
+	model.State = stateOrNull(rule.State)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 

@@ -625,6 +625,26 @@ func TestInstanceResource_deleteHappyPath(t *testing.T) {
 	}
 }
 
+func TestInstanceResource_deleteKeepsIPWhenAssignPublicIPFalse(t *testing.T) {
+	// assign_public_ip=false means no auto-assigned IP exists, so destroy must
+	// not ask the API to release one.
+	svc := &fakeInstanceService{getErr: &apierrors.APIError{StatusCode: 404}}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	vals := instanceValues(t, "vm1-abc")
+	vals["assign_public_ip"] = tftypes.NewValue(tftypes.Bool, false)
+	stateVal := tftypes.NewValue(instanceTFType(t), vals)
+	deleteReq := resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	var deleteResp resource.DeleteResponse
+	r.Delete(context.Background(), deleteReq, &deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", deleteResp.Diagnostics)
+	}
+	if len(svc.deletedPublicIP) != 1 || svc.deletedPublicIP[0] {
+		t.Errorf("Delete deletePublicIP = %v, want [false]", svc.deletedPublicIP)
+	}
+}
+
 func TestInstanceResource_delete404IsNoOp(t *testing.T) {
 	svc := &fakeInstanceService{
 		deleteErr: &apierrors.APIError{StatusCode: 404},

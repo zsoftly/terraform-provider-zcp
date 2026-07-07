@@ -324,34 +324,54 @@ func (r *autoscaleGroupResource) Update(ctx context.Context, req resource.Update
 	model.State = state.State
 	model.CurrentCount = state.CurrentCount
 
+	// fresh carries the latest group returned by a lifecycle call, so state
+	// and current_count are written from live data instead of the old state.
+	var fresh *autoscale.AutoscaleGroup
+
 	if plan.Plan.ValueString() != state.Plan.ValueString() {
-		if _, err := r.svc.ChangePlan(ctx, slug, plan.Plan.ValueString()); err != nil {
+		g, err := r.svc.ChangePlan(ctx, slug, plan.Plan.ValueString())
+		if err != nil {
 			resp.Diagnostics.AddError("Failed to change autoscale group plan", err.Error())
 			return
 		}
+		if g != nil && g.Slug != "" {
+			fresh = g
+		}
 	}
 	if plan.Template.ValueString() != state.Template.ValueString() {
-		if _, err := r.svc.ChangeTemplate(ctx, slug, plan.Template.ValueString()); err != nil {
+		g, err := r.svc.ChangeTemplate(ctx, slug, plan.Template.ValueString())
+		if err != nil {
 			resp.Diagnostics.AddError("Failed to change autoscale group template", err.Error())
 			return
+		}
+		if g != nil && g.Slug != "" {
+			fresh = g
 		}
 	}
 
 	planEnabled := plan.Enabled.IsNull() || plan.Enabled.IsUnknown() || plan.Enabled.ValueBool()
 	stateEnabled := state.Enabled.IsNull() || state.Enabled.ValueBool()
 	if planEnabled != stateEnabled {
+		var g *autoscale.AutoscaleGroup
 		var err error
 		if planEnabled {
-			_, err = r.svc.Enable(ctx, slug)
+			g, err = r.svc.Enable(ctx, slug)
 		} else {
-			_, err = r.svc.Disable(ctx, slug)
+			g, err = r.svc.Disable(ctx, slug)
 		}
 		if err != nil {
 			resp.Diagnostics.AddError("Failed to toggle autoscale group", err.Error())
 			return
 		}
+		if g != nil && g.Slug != "" {
+			fresh = g
+		}
 	}
 
+	if fresh != nil {
+		applyGroupState(&model, fresh)
+		model.ID = state.ID
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 

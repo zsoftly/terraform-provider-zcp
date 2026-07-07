@@ -13,6 +13,18 @@ outbound rules on a network use `zcp_egress_rule`.
 ## Example Usage
 
 ```terraform
+data "zcp_region" "yow" {
+  slug = "yow-1"
+}
+
+resource "zcp_network" "prod" {
+  name           = "prod-network"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  network_plan   = "inet-yow"
+  billing_cycle  = "hourly"
+}
+
 resource "zcp_ip_address" "web" {
   plan          = "public-ip-1"
   billing_cycle = "hourly"

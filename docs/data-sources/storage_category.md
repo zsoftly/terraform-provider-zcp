@@ -12,9 +12,13 @@ in YOW, `pro-nvme` in YUL), so pass `region` to scope the lookup.
 ## Example Usage
 
 ```terraform
+data "zcp_region" "yul" {
+  slug = "yul-1"
+}
+
 data "zcp_storage_category" "nvme" {
   slug   = "pro-nvme"
-  region = "yul-1"
+  region = data.zcp_region.yul.slug
 }
 
 resource "zcp_instance" "web" {

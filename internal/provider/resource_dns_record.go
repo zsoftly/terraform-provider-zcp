@@ -72,7 +72,7 @@ func (r *dnsRecordResource) Schema(ctx context.Context, _ resource.SchemaRequest
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Relative record name (e.g. `www`). The zone is appended by the backend. Changing this forces replacement.",
+				MarkdownDescription: "Relative record name (e.g. `www`), or `@` for the zone apex. The zone is appended by the backend. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"type": schema.StringAttribute{

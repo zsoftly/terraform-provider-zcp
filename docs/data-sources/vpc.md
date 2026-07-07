@@ -12,9 +12,13 @@ created outside Terraform.
 ## Example Usage
 
 ```terraform
+data "zcp_region" "yow" {
+  slug = "yow-1"
+}
+
 data "zcp_vpc" "main" {
   slug   = "main-vpc"
-  region = "yow-1"
+  region = data.zcp_region.yow.slug
 }
 
 resource "zcp_network_acl" "web" {

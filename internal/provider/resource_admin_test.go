@@ -129,6 +129,10 @@ func TestProjectResource_updatePreservesOptionalFieldsWhenUnset(t *testing.T) {
 	if got.Purpose.ValueString() != "old purpose" {
 		t.Errorf("Purpose = %q, want old purpose", got.Purpose.ValueString())
 	}
+	// The API request must omit the unset fields, not resend stale values.
+	if svc.updateReq == nil || svc.updateReq.Description != "" || svc.updateReq.Purpose != "" {
+		t.Errorf("updateReq = %+v, want description and purpose omitted", svc.updateReq)
+	}
 }
 
 func TestProjectResource_readClearsEmptyOptionalFields(t *testing.T) {
@@ -194,6 +198,42 @@ func (f *fakeSubUserService) Delete(_ context.Context, id string) error {
 		f.users = nil
 	}
 	return f.err
+}
+
+func TestSubUserResource_validateConfigPassword(t *testing.T) {
+	r := internalprovider.NewSubUserResource().(resource.ResourceWithValidateConfig)
+	var schResp resource.SchemaResponse
+	r.(resource.Resource).Schema(context.Background(), resource.SchemaRequest{}, &schResp)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+
+	run := func(pw string) resource.ValidateConfigResponse {
+		cfg := subUserConfig("")
+		cfg["password"] = strVal(pw)
+		cfg["is_blocked"] = tftypes.NewValue(tftypes.Bool, nil)
+		cfg["status"] = tftypes.NewValue(tftypes.String, nil)
+		cfg["id"] = tftypes.NewValue(tftypes.String, nil)
+		cfg["timeouts"] = timeoutsNull(t, schResp)
+		req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, cfg)}}
+		var resp resource.ValidateConfigResponse
+		r.ValidateConfig(context.Background(), req, &resp)
+		return resp
+	}
+
+	if resp := run("Sup3r$ecret"); resp.Diagnostics.HasError() {
+		t.Errorf("valid password rejected: %v", resp.Diagnostics)
+	}
+	weak := []string{
+		"S1$a",          // under 8 characters
+		"nouppercase1$", // no uppercase
+		"NOLOWERCASE1$", // no lowercase
+		"NoDigitsHere$", // no digit
+		"NoSpecial11a",  // no special character
+	}
+	for _, pw := range weak {
+		if resp := run(pw); !resp.Diagnostics.HasError() {
+			t.Errorf("password %q accepted, want complexity error", pw)
+		}
+	}
 }
 
 func subUserConfig(id string) map[string]tftypes.Value {
@@ -450,8 +490,8 @@ func TestBudgetAlertResource_createSetsAlert(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if len(svc.setReqs) != 1 || svc.setReqs[0].Amount != 500 || !svc.setReqs[0].IsEnabled {
-		t.Errorf("setReqs = %+v, want one enabled with amount 500", svc.setReqs)
+	if len(svc.setReqs) != 1 || svc.setReqs[0].Amount != 500 || svc.setReqs[0].Threshold != 80 || !svc.setReqs[0].IsEnabled {
+		t.Errorf("setReqs = %+v, want one enabled with amount 500 and threshold 80", svc.setReqs)
 	}
 	if got := stateID(t, resp.State); got != "budget-alert" {
 		t.Errorf("ID = %q, want budget-alert", got)

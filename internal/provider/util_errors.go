@@ -17,5 +17,8 @@ func isBackendNotFound(err error) bool {
 	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 		return true
 	}
+	// Temporary workaround: substring matching is brittle, but the backend
+	// exposes no structured error code for this case yet. Narrow or remove the
+	// match once the platform returns a proper 404 (backend ticket pending).
 	return strings.Contains(strings.ToLower(err.Error()), "no query results for model")
 }

@@ -239,6 +239,11 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 		resp.Diagnostics.AddError("Failed to create object storage", err.Error())
 		return
 	}
+	if store == nil || store.Slug == "" {
+		resp.Diagnostics.AddError("Failed to create object storage",
+			fmt.Sprintf("the API accepted the create for %q but returned no store; check the object storage list before retrying.", model.Name.ValueString()))
+		return
+	}
 
 	// The create response can omit credentials; refresh from Get when needed.
 	if store.APIKey == "" || store.APISecret == "" {
@@ -320,6 +325,15 @@ func (r *objectStorageResource) Update(ctx context.Context, req resource.UpdateR
 	model.Size = state.Size
 
 	if !plan.SizeGB.IsNull() && !plan.SizeGB.IsUnknown() && plan.SizeGB.ValueInt64() != state.SizeGB.ValueInt64() {
+		// The platform only grows object storage; catching a shrink here
+		// avoids an opaque API rejection at apply time.
+		if !state.SizeGB.IsNull() && plan.SizeGB.ValueInt64() < state.SizeGB.ValueInt64() {
+			resp.Diagnostics.AddError(
+				"Object storage cannot shrink",
+				fmt.Sprintf("size_gb can only increase (current %d, planned %d). Create a new store and migrate the data to reduce capacity.", state.SizeGB.ValueInt64(), plan.SizeGB.ValueInt64()),
+			)
+			return
+		}
 		store, err := r.svc.Resize(ctx, slug, int(plan.SizeGB.ValueInt64()))
 		if err != nil {
 			resp.Diagnostics.AddError("Failed to resize object storage", err.Error())

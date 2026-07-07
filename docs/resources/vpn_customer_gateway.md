@@ -45,17 +45,20 @@ the API; set them in config before importing to avoid a follow-up diff.
 ### Required
 
 - `name` (String) Display name. Updated in place.
-- `gateway` (String) Remote gateway IP address.
+- `gateway` (String) Remote gateway IP address. Changing this forces
+  replacement.
 - `cidr_list` (String) Comma-separated list of CIDRs reachable behind the remote
-  gateway.
-- `ipsec_psk` (String, Sensitive) IPSec pre-shared key. Write-only.
+  gateway. Changing this forces replacement.
+- `ipsec_psk` (String, Sensitive) IPSec pre-shared key. Write-only. Changing
+  this forces replacement.
 - `ike_policy` (String) IKE policy string (e.g. `aes128-sha1-dh5`). Updated in
   place.
 - `esp_policy` (String) ESP policy string (e.g. `aes128-sha1`). Updated in
   place.
 - `cloud_provider` (String) Cloud provider slug. Read it from `data.zcp_region`
-  instead of hardcoding.
-- `region` (String) Region slug (e.g. `yow-1`).
+  instead of hardcoding. Changing this forces replacement.
+- `region` (String) Region slug (e.g. `yow-1`). Changing this forces
+  replacement.
 
 ### Optional
 
@@ -64,7 +67,8 @@ the API; set them in config before importing to avoid a follow-up diff.
 - `ike_encryption` (String) IKE encryption algorithm (e.g. `aes128`).
   Write-only.
 - `ike_hash` (String) IKE hash algorithm (e.g. `sha1`). Write-only.
-- `ike_version` (String) IKE version: `ike`, `ikev1`, or `ikev2`.
+- `ike_version` (String) IKE version: `ike`, `ikev1`, or `ikev2`. Changing this
+  forces replacement.
 - `ike_dh` (String) IKE Diffie-Hellman group (e.g. `modp2048`). Write-only.
 - `esp_encryption` (String) ESP encryption algorithm. Write-only.
 - `esp_hash` (String) ESP hash algorithm. Write-only.

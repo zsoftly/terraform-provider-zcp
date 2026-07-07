@@ -8,6 +8,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -127,7 +128,9 @@ func (r *isoResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp
 			},
 			"is_bootable": schema.BoolAttribute{
 				Optional:            true,
-				MarkdownDescription: "Whether the ISO is bootable. Updated in place.",
+				Computed:            true,
+				Default:             booldefault.StaticBool(true),
+				MarkdownDescription: "Whether the ISO is bootable. Defaults to `true`. Updated in place.",
 			},
 			"state": schema.StringAttribute{
 				Computed:            true,
@@ -203,8 +206,8 @@ func (r *isoResource) Create(ctx context.Context, req resource.CreateRequest, re
 	if !model.IsExtractable.IsNull() && !model.IsExtractable.IsUnknown() {
 		createReq.IsExtractable = model.IsExtractable.ValueBool()
 	}
-	// is_bootable defaults to true: a non-bootable ISO is the rare case.
-	createReq.IsBootable = model.IsBootable.IsNull() || model.IsBootable.IsUnknown() || model.IsBootable.ValueBool()
+	// is_bootable carries a schema default of true, so it is always known.
+	createReq.IsBootable = model.IsBootable.ValueBool()
 
 	created, err := r.svc.Create(ctx, createReq)
 	if err != nil {
@@ -257,9 +260,9 @@ func (r *isoResource) Read(ctx context.Context, req resource.ReadRequest, resp *
 			if !model.IsExtractable.IsNull() {
 				model.IsExtractable = types.BoolValue(img.IsExtractable)
 			}
-			if !model.IsBootable.IsNull() {
-				model.IsBootable = types.BoolValue(img.IsBootable)
-			}
+			// is_bootable has a schema default, so state always holds a
+			// known value; refresh it from the API.
+			model.IsBootable = types.BoolValue(img.IsBootable)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 			return
 		}
@@ -290,7 +293,7 @@ func (r *isoResource) Update(ctx context.Context, req resource.UpdateRequest, re
 	updateReq := iso.UpdateRequest{
 		PasswordEnabled: !plan.PasswordEnabled.IsNull() && plan.PasswordEnabled.ValueBool(),
 		IsExtractable:   !plan.IsExtractable.IsNull() && plan.IsExtractable.ValueBool(),
-		IsBootable:      plan.IsBootable.IsNull() || plan.IsBootable.ValueBool(),
+		IsBootable:      plan.IsBootable.ValueBool(),
 	}
 	if err := r.svc.Update(ctx, state.ID.ValueString(), updateReq); err != nil {
 		resp.Diagnostics.AddError("Failed to update ISO permissions", err.Error())
