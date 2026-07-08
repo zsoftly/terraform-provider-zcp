@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"testing"
-	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -14,6 +13,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/instance"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 
 	internalprovider "github.com/zsoftly/terraform-provider-zcp/internal/provider"
 )
@@ -21,13 +21,14 @@ import (
 // fakeInstanceService satisfies instanceServiceIface.
 type fakeInstanceService struct {
 	created         *instance.VirtualMachine
-	waited          *instance.VirtualMachine
 	got             *instance.VirtualMachine
 	logs            []instance.ActivityLog
 	createReq       instance.CreateRequest
 	createErr       error
-	waitErr         error
 	getErr          error
+	gotQueue        []*instance.VirtualMachine
+	metaState       string
+	metaErr         error
 	deleted         []string
 	expunged        []bool
 	deletedPublicIP []bool
@@ -43,11 +44,10 @@ type fakeInstanceService struct {
 	tagsDeleted   []string
 	startCalled   int
 	stopCalled    int
-	waitedStates  [][]string
 
-	// staleCache simulates the CMP's lagging state field: Stop/Start do NOT update
-	// got.State, and instead append a fresh VM.ACTION=SUCCESS log (with a unique,
-	// increasing timestamp) so readiness must come from the activity log.
+	// staleCache simulates the CMP's lagging cached state: Stop/Start do NOT
+	// update got.State. They update metaState (the live view) and append a fresh
+	// VM.ACTION=SUCCESS log, so readiness must come from the /meta endpoint.
 	staleCache bool
 	actionSeq  int
 }
@@ -66,11 +66,28 @@ func (f *fakeInstanceService) Create(_ context.Context, req instance.CreateReque
 }
 func (f *fakeInstanceService) Get(_ context.Context, _ string) (*instance.VirtualMachine, error) {
 	f.getCalls++
+	if len(f.gotQueue) > 0 {
+		vm := f.gotQueue[0]
+		f.gotQueue = f.gotQueue[1:]
+		return vm, nil
+	}
 	return f.got, f.getErr
 }
-func (f *fakeInstanceService) WaitForState(_ context.Context, _ string, states []string, _ time.Duration) (*instance.VirtualMachine, error) {
-	f.waitedStates = append(f.waitedStates, states)
-	return f.waited, f.waitErr
+
+// Meta returns the live state: metaState when set, else the cached got.State.
+func (f *fakeInstanceService) Meta(_ context.Context, _ string) (*instance.VMMeta, error) {
+	if f.metaErr != nil {
+		return nil, f.metaErr
+	}
+	meta := &instance.VMMeta{State: f.metaState}
+	if f.got != nil {
+		meta.ID = f.got.ID
+		meta.Name = f.got.Name
+		if meta.State == "" {
+			meta.State = f.got.State
+		}
+	}
+	return meta, nil
 }
 func (f *fakeInstanceService) ActivityLogs(_ context.Context, _ string) ([]instance.ActivityLog, error) {
 	return f.logs, nil
@@ -108,6 +125,7 @@ func (f *fakeInstanceService) DeleteTag(_ context.Context, _ string, key string)
 func (f *fakeInstanceService) Start(_ context.Context, _ string) (*instance.ActionResponse, error) {
 	f.startCalled++
 	if f.staleCache {
+		f.metaState = "Running"
 		f.pushAction()
 		return &instance.ActionResponse{}, nil
 	}
@@ -119,6 +137,7 @@ func (f *fakeInstanceService) Start(_ context.Context, _ string) (*instance.Acti
 func (f *fakeInstanceService) Stop(_ context.Context, _ string) (*instance.ActionResponse, error) {
 	f.stopCalled++
 	if f.staleCache {
+		f.metaState = "Stopped"
 		f.pushAction()
 		return &instance.ActionResponse{}, nil
 	}
@@ -254,10 +273,10 @@ func TestInstanceResource_createWaitsForRunning(t *testing.T) {
 	}
 }
 
-// TestInstanceResource_createReadyViaActivityLog verifies the VM.CREATE log is
-// used as the readiness signal: the cached state is still "Starting" but the log
-// reports SUCCESS, so create returns and stamps state as Running.
-func TestInstanceResource_createReadyViaActivityLog(t *testing.T) {
+// TestInstanceResource_createReadyViaLiveMeta verifies /meta is the readiness
+// signal: the cached state is still "Starting" but the live meta view reports
+// Running, so create returns and stamps state as Running.
+func TestInstanceResource_createReadyViaLiveMeta(t *testing.T) {
 	pubIP := "203.0.113.9"
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
@@ -268,8 +287,8 @@ func TestInstanceResource_createReadyViaActivityLog(t *testing.T) {
 			PublicIP: &pubIP,
 			Networks: []instance.VMNetwork{{IsDefault: true, Pivot: &instance.VMNetworkIP{IsDefault: true, IPAddress: "10.0.0.7"}}},
 		},
-		// ...but the activity log says the VM is up.
-		logs: []instance.ActivityLog{{Action: "VM.CREATE", Status: "SUCCESS"}},
+		// ...but the live /meta view says the VM is up.
+		metaState: "Running",
 	}
 	resp := createInstance(t, svc)
 	if resp.Diagnostics.HasError() {
@@ -280,7 +299,7 @@ func TestInstanceResource_createReadyViaActivityLog(t *testing.T) {
 		t.Fatalf("reading state: %v", diags)
 	}
 	if got.State.ValueString() != "Running" {
-		t.Errorf("State = %q, want Running (log-confirmed despite stale Starting)", got.State.ValueString())
+		t.Errorf("State = %q, want Running (meta-confirmed despite stale Starting)", got.State.ValueString())
 	}
 	if got.PublicIP.ValueString() != "203.0.113.9" || got.PrivateIP.ValueString() != "10.0.0.7" {
 		t.Errorf("IPs not populated: public=%q private=%q", got.PublicIP.ValueString(), got.PrivateIP.ValueString())
@@ -423,7 +442,7 @@ func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap ma
 // without the user touching power_state.
 func TestInstanceResource_updateResizeIsTransparent(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", State: "Running"}
-	svc := &fakeInstanceService{got: vm, waited: vm}
+	svc := &fakeInstanceService{got: vm}
 	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
 	plan := instanceVariant(t, "vm2", "ci1.large", "hourly", "echo hi", nil)
 	resp := updateInstance(t, svc, plan, state)
@@ -455,7 +474,7 @@ func TestInstanceResource_updateResizeIsTransparent(t *testing.T) {
 // is already stopped does not start it — power state is preserved, not managed.
 func TestInstanceResource_updateResizeWhenStopped(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Stopped"}
-	svc := &fakeInstanceService{got: vm, waited: vm}
+	svc := &fakeInstanceService{got: vm}
 	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
 	plan := instanceVariant(t, "vm1", "ci1.large", "hourly", "", nil)
 	resp := updateInstance(t, svc, plan, state)
@@ -477,9 +496,9 @@ func TestInstanceResource_updateResizeWhenStopped(t *testing.T) {
 // TestInstanceResource_resizeRestartsOnFailure verifies that a failed offering
 // change restarts a VM that was running, honoring the transparent-resize contract.
 // TestInstanceResource_resizeViaActivityLog verifies a resize completes when the
-// cached state never updates (stays "Running"), relying on the VM.ACTION log to
-// confirm each stop/change/start step. Without the log path this would hang.
-func TestInstanceResource_resizeViaActivityLog(t *testing.T) {
+// cached state never updates (stays "Running"), relying on the live /meta view
+// to confirm each stop/change/start step. Without it this would hang.
+func TestInstanceResource_resizeWithStaleCachedState(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
 	svc := &fakeInstanceService{got: vm, staleCache: true}
 	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
@@ -498,7 +517,7 @@ func TestInstanceResource_resizeViaActivityLog(t *testing.T) {
 
 func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
-	svc := &fakeInstanceService{got: vm, waited: vm, changePlanErr: errors.New("offering change failed")}
+	svc := &fakeInstanceService{got: vm, changePlanErr: errors.New("offering change failed")}
 	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
 	plan := instanceVariant(t, "vm1", "ci1.large", "hourly", "", nil)
 	resp := updateInstance(t, svc, plan, state)
@@ -537,7 +556,7 @@ func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 
 func TestInstanceResource_updateTags(t *testing.T) {
 	vm := &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"}
-	svc := &fakeInstanceService{got: vm, waited: vm}
+	svc := &fakeInstanceService{got: vm}
 	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", map[string]string{"A": "1", "C": "9"})
 	plan := instanceVariant(t, "vm1", "ci1.small", "hourly", "", map[string]string{"A": "2", "B": "3"})
 	resp := updateInstance(t, svc, plan, state)
@@ -653,5 +672,118 @@ func TestInstanceResource_delete404IsNoOp(t *testing.T) {
 	resp := deleteInstance(t, svc, "gone")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("404 delete should be a no-op: %v", resp.Diagnostics)
+	}
+}
+
+// fakeIPLister satisfies publicIPLister.
+type fakeIPLister struct {
+	ips  []ipaddress.IPAddress
+	err  error
+	seen int
+}
+
+func (f *fakeIPLister) List(_ context.Context, _, _, _ string) ([]ipaddress.IPAddress, error) {
+	f.seen++
+	return f.ips, f.err
+}
+
+// TestInstanceResource_createWaitsForPrivateIP verifies the post-Running wait:
+// the first Get after meta reports Running has no address yet, the second one
+// does, and the applied state carries it.
+func TestInstanceResource_createWaitsForPrivateIP(t *testing.T) {
+	noIP := &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"}
+	withIP := &instance.VirtualMachine{
+		Slug: "vm1-abc", State: "Starting",
+		Networks: []instance.VMNetwork{{IsDefault: true, Pivot: &instance.VMNetworkIP{IsDefault: true, IPAddress: "10.0.0.42"}}},
+	}
+	svc := &fakeInstanceService{
+		created:   &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+		metaState: "Running",
+		gotQueue:  []*instance.VirtualMachine{noIP, withIP},
+		got:       withIP,
+	}
+	resp := createInstance(t, svc)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.PrivateIP.ValueString() != "10.0.0.42" {
+		t.Errorf("PrivateIP = %q, want 10.0.0.42 (from the second read)", got.PrivateIP.ValueString())
+	}
+}
+
+// TestInstanceResource_createNoPrivateIPStillSucceeds verifies the wait is best
+// effort: a VM that never reports an address still applies cleanly.
+func TestInstanceResource_createNoPrivateIPStillSucceeds(t *testing.T) {
+	svc := &fakeInstanceService{
+		created:   &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+		metaState: "Running",
+		got:       &instance.VirtualMachine{Slug: "vm1-abc", State: "Starting"},
+	}
+	resp := createInstance(t, svc)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_publicIPResolvedFromIPList verifies the source-NAT
+// fallback: the VM object has no public_ip, so it is resolved from the IP list
+// by VM ID, preferring a static assignment over source-NAT.
+func TestInstanceResource_publicIPResolvedFromIPList(t *testing.T) {
+	vm := &instance.VirtualMachine{
+		ID: "vm-uuid-1", Slug: "vm1-abc", State: "Running",
+		Networks: []instance.VMNetwork{{IsDefault: true, Pivot: &instance.VMNetworkIP{IsDefault: true, IPAddress: "10.0.0.7"}}},
+	}
+	ipSvc := &fakeIPLister{ips: []ipaddress.IPAddress{
+		{VirtualMachineID: "other-vm", IPAddress: "203.0.113.1", Strategy: "STATIC"},
+		{VirtualMachineID: "vm-uuid-1", IPAddress: "206.248.159.158", Strategy: "SOURCE-NAT"},
+	}}
+	svc := &fakeInstanceService{created: vm, got: vm, metaState: "Running"}
+	r := internalprovider.NewInstanceResourceWithServices(svc, ipSvc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, instanceValues(t, ""))}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := createResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.PublicIP.ValueString() != "206.248.159.158" {
+		t.Errorf("PublicIP = %q, want 206.248.159.158 (resolved from IP list)", got.PublicIP.ValueString())
+	}
+}
+
+// TestInstanceResource_publicIPLookupSkippedWhenOptedOut verifies a private-only
+// instance (assign_public_ip = false) never queries the IP list.
+func TestInstanceResource_publicIPLookupSkippedWhenOptedOut(t *testing.T) {
+	vm := &instance.VirtualMachine{ID: "vm-uuid-1", Slug: "vm1-abc", State: "Running"}
+	ipSvc := &fakeIPLister{ips: []ipaddress.IPAddress{{VirtualMachineID: "vm-uuid-1", IPAddress: "206.248.159.158", Strategy: "SOURCE-NAT"}}}
+	svc := &fakeInstanceService{created: vm, got: vm, metaState: "Running"}
+	r := internalprovider.NewInstanceResourceWithServices(svc, ipSvc)
+	schResp := instanceSchema(t)
+	vals := instanceValues(t, "")
+	vals["assign_public_ip"] = tftypes.NewValue(tftypes.Bool, false)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(instanceTFType(t), vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(instanceTFType(t), nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if ipSvc.seen != 0 {
+		t.Errorf("IP list queried %d times for a private-only instance, want 0", ipSvc.seen)
+	}
+	var got instanceStateModel
+	if diags := createResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.PublicIP.ValueString() != "" {
+		t.Errorf("PublicIP = %q, want empty for a private-only instance", got.PublicIP.ValueString())
 	}
 }

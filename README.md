@@ -33,13 +33,22 @@ data "zcp_region" "yul" {
   slug = "yul-1"
 }
 
+resource "zcp_network" "app" {
+  name           = "app-network"
+  cloud_provider = data.zcp_region.yul.cloud_provider
+  region         = data.zcp_region.yul.slug
+  network_plan   = "pnet-yul"
+  billing_cycle  = "hourly"
+}
+
 resource "zcp_instance" "web" {
   name             = "web-01"
   template         = "ubuntu-2604-lts-1"
   plan             = "ca2sl"
   billing_cycle    = "hourly"
-  network_plan     = "pnet-yul"
+  network          = zcp_network.app.id
   storage_category = "premium-ssd"
+  cloud_provider   = data.zcp_region.yul.cloud_provider
   region           = data.zcp_region.yul.slug
 }
 ```

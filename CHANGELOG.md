@@ -6,7 +6,7 @@ project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [v0.1.0] - 2026-07-07
 
-Initial release. Built on the zcp-cli SDK v0.0.22 and verified against the live
+Initial release. Built on the zcp-cli SDK v0.0.23 and verified against the live
 ZCP platform.
 
 ### Added

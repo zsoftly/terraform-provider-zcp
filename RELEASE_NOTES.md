@@ -6,7 +6,7 @@ everything the `zcp` CLI supports: instances, volumes, snapshots and backups,
 VPCs and networks, firewall and egress rules, load balancers, autoscaling,
 Kubernetes clusters, DNS, object storage, VPN, and account governance.
 
-Built on the zcp-cli SDK v0.0.22. Every resource supports import. We verified
+Built on the zcp-cli SDK v0.0.23. Every resource supports import. We verified
 the core paths against the live platform (create, read, update, delete, and
 zero-diff re-plan).
 
@@ -89,6 +89,15 @@ reference, import format, and a runnable example under `examples/`.
 
 ## Known platform behaviors
 
+- Deleting an instance does not release its auto-assigned public IP: the
+  platform's IP-release endpoint rejects token auth (a known CMP bug with a fix
+  in progress). The provider already sends the release request, so destroy heals
+  automatically once the fix lands. Until then, release the IP manually with
+  `zcp ip release <ip-slug>`.
+- The platform's cached instance state lags behind reality, sometimes by many
+  minutes. The provider polls the live `/meta` endpoint (SDK v0.0.23), which
+  reconciles against the hypervisor, so creates and resizes finish as soon as
+  the VM is up.
 - On some networks, egress rule creation returns success while the backend
   creates nothing. The provider polls the rule list and fails loudly instead of
   recording a nonexistent rule.

@@ -123,10 +123,23 @@ func NewFirewallRuleResourceWithService(svc firewallServiceIface) resource.Resou
 	return &firewallRuleResource{svc: svc}
 }
 
+// Test binaries shorten the post-Running private-IP wait so create tests with
+// fixtures that never report an address finish in milliseconds, not minutes.
+func init() {
+	privateIPPollInterval = 20 * time.Millisecond
+	privateIPPollWindow = 100 * time.Millisecond
+}
+
 // NewInstanceResourceWithService creates an instanceResource pre-wired with the
 // given service; available only in test binaries.
 func NewInstanceResourceWithService(svc instanceServiceIface) resource.Resource {
 	return &instanceResource{svc: svc}
+}
+
+// NewInstanceResourceWithServices additionally wires a public-IP lister;
+// available only in test binaries.
+func NewInstanceResourceWithServices(svc instanceServiceIface, ipSvc publicIPLister) resource.Resource {
+	return &instanceResource{svc: svc, ipSvc: ipSvc}
 }
 
 // NewVolumeResourceWithService creates a volumeResource pre-wired with the
