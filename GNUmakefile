@@ -28,8 +28,11 @@ test:
 test-race:
 	go test -race -count=1 ./...
 
+# Formats Go source and markdown. Prettier is pinned to major version 3 and
+# fetched via npx on first use (requires node).
 fmt:
 	gofmt -s -w .
+	npx --yes prettier@3 --write --log-level warn "**/*.md"
 
 vet:
 	go vet ./...
@@ -50,8 +53,8 @@ dev-install: build
 	@echo ""
 	@echo "Binary built at $(CURDIR)/$(BINARY)"
 	@echo "Ensure your CLI config points here via dev_overrides:"
-	@echo "  ~/.tofurc      — \"$(OTF_ADDR)\" = \"$(CURDIR)\""
-	@echo "  ~/.terraformrc — \"$(TF_ADDR)\"  = \"$(CURDIR)\""
+	@echo "  ~/.tofurc      -> \"$(OTF_ADDR)\" = \"$(CURDIR)\""
+	@echo "  ~/.terraformrc -> \"$(TF_ADDR)\"  = \"$(CURDIR)\""
 	@echo ""
 
 clean:

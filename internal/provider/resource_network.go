@@ -126,7 +126,7 @@ func (r *networkResource) Schema(ctx context.Context, _ resource.SchemaRequest, 
 			},
 			"acl": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "ID of a `zcp_network_acl` to attach to this subnet (VPC subnets only). Updated in place. The API does not return the attached ACL ID on read, so it is preserved from state.",
+				MarkdownDescription: "ID of a `zcp_network_acl` to attach to the network. Only valid for networks created inside a VPC. Updated in place. The API does not return the attached ACL ID on read, so it is preserved from state.",
 			},
 			"billing_cycle": schema.StringAttribute{
 				Optional:            true,

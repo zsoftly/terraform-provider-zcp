@@ -107,3 +107,30 @@ func (v int64AtLeastValidator) ValidateInt64(_ context.Context, req validator.In
 		)
 	}
 }
+
+// setSizeAtLeastValidator enforces a minimum number of elements on a Set
+// attribute.
+type setSizeAtLeastValidator struct {
+	min int
+}
+
+func (v setSizeAtLeastValidator) Description(_ context.Context) string {
+	return fmt.Sprintf("must contain at least %d item(s)", v.min)
+}
+
+func (v setSizeAtLeastValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v setSizeAtLeastValidator) ValidateSet(_ context.Context, req validator.SetRequest, resp *validator.SetResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if len(req.ConfigValue.Elements()) < v.min {
+		resp.Diagnostics.AddAttributeError(
+			req.Path,
+			"Not enough values",
+			fmt.Sprintf("Expected at least %d item(s), got %d.", v.min, len(req.ConfigValue.Elements())),
+		)
+	}
+}

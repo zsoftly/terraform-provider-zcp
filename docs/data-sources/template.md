@@ -6,7 +6,9 @@ description: |-
 
 # zcp_template
 
-Look up a ZCP public VM template by slug. Optionally narrow the search to a specific region to avoid ambiguity when the same template slug exists in multiple regions.
+Look up a ZCP public VM template by slug. Optionally narrow the search to a
+specific region to avoid ambiguity when the same template slug exists in
+multiple regions.
 
 ## Example Usage
 
@@ -33,7 +35,9 @@ output "template_id" {
 
 ### Optional
 
-- `region_slug` (String) Narrow the search to a specific region slug. Recommended to avoid ambiguity when the same template exists in multiple regions.
+- `region_slug` (String) Narrow the search to a specific region slug.
+  Recommended to avoid ambiguity when the same template exists in multiple
+  regions.
 
 ### Read-Only
 

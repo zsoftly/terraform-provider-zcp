@@ -6,7 +6,9 @@ description: |-
 
 # zcp_region
 
-Look up a ZCP region by slug and expose its attributes as read-only values. Use the `slug` output in resource `region` arguments to reference a region without hard-coding its ID.
+Look up a ZCP region by slug and expose its attributes as read-only values. Use
+the `slug` output in resource `region` arguments to reference a region without
+hard-coding its ID.
 
 ## Example Usage
 
@@ -37,4 +39,6 @@ resource "zcp_network" "app" {
 - `name` (String) Region display name.
 - `country` (String) Full country name.
 - `country_code` (String) ISO country code.
-- `cloud_provider` (String) Cloud provider slug for this region (e.g. `nimbo` for compute regions). Pass this to the `cloud_provider` argument of `zcp_network` and `zcp_vpc` resources.
+- `cloud_provider` (String) Cloud provider slug for this region (e.g. `nimbo`
+  for compute regions). Pass this to the `cloud_provider` argument of
+  `zcp_network` and `zcp_vpc` resources.

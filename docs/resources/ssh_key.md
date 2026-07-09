@@ -6,9 +6,12 @@ description: |-
 
 # zcp_ssh_key
 
-Manages a ZCP SSH public key. SSH keys can be attached to virtual machines at creation time to enable key-based authentication.
+Manages a ZCP SSH public key. SSH keys can be attached to virtual machines at
+creation time to enable key-based authentication.
 
-Because the ZCP API provides no update endpoint for SSH keys, all attributes are immutable. Changing any of `name`, `public_key`, or `project` forces replacement.
+Because the ZCP API provides no update endpoint for SSH keys, all attributes are
+immutable. Changing any of `name`, `public_key`, or `project` forces
+replacement.
 
 ## Example Usage
 
@@ -21,24 +24,32 @@ resource "zcp_ssh_key" "deploy" {
 
 ## Import
 
-Import an existing SSH key by its slug:
+Import using `<slug>/<region>[/<project>]`. Omit `<project>` when the config
+relies on the provider `default_project`:
 
 ```shell
-terraform import zcp_ssh_key.deploy <slug>
+terraform import zcp_ssh_key.deploy deploy-key-a1b2/yow-1
 ```
 
-After import, `project` will be null in state. Add it to your configuration if you need to track the project association.
+The API returns only a normalized form of the key material, so import leaves
+`public_key` unset. The first apply after import records the configured
+`public_key` in state without replacing the key. Later changes to it force
+replacement as usual.
 
 ## Schema
 
 ### Required
 
-- `name` (String) Display name for the SSH key. Changing this forces replacement.
-- `public_key` (String, Sensitive) OpenSSH public key material (e.g. the contents of `~/.ssh/id_ed25519.pub`). Changing this forces replacement.
+- `name` (String) Display name for the SSH key. Changing this forces
+  replacement.
+- `public_key` (String, Sensitive) OpenSSH public key material (e.g. the
+  contents of `~/.ssh/id_ed25519.pub`). Changing this forces replacement.
 
 ### Optional
 
-- `project` (String) Project slug. Inherits from the provider `default_project` if omitted. Changing this forces replacement.
+- `project` (String) Project slug. Inherits from the provider `default_project`
+  if omitted. Changing this forces replacement.
+- `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
 

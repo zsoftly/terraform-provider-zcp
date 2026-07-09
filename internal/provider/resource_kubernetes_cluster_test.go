@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -20,15 +21,20 @@ import (
 // return a sequence of clusters across successive Get calls (e.g. Scaling then
 // Running); when exhausted, the last entry is returned for subsequent calls.
 type fakeKubernetesService struct {
-	created   *kubernetes.Cluster
-	getQueue  []*kubernetes.Cluster
-	createErr error
-	getErr    error
-	scaleErr  error
-	deleteErr error
-	scaledTo  []int
-	deleted   []string
-	getCalls  int
+	created         *kubernetes.Cluster
+	getQueue        []*kubernetes.Cluster
+	createErr       error
+	getErr          error
+	scaleErr        error
+	deleteErr       error
+	upgradeErr      error
+	versions        []kubernetes.KubernetesVersion
+	scaledTo        []int
+	deleted         []string
+	planUpgrades    []string
+	versionUpgrades []string
+	operations      []string
+	getCalls        int
 }
 
 func (f *fakeKubernetesService) Create(_ context.Context, _ kubernetes.CreateRequest) (*kubernetes.Cluster, error) {
@@ -48,9 +54,23 @@ func (f *fakeKubernetesService) Get(_ context.Context, _ string) (*kubernetes.Cl
 	}
 	return f.getQueue[idx], nil
 }
+func (f *fakeKubernetesService) ListVersions(_ context.Context) ([]kubernetes.KubernetesVersion, error) {
+	return f.versions, nil
+}
 func (f *fakeKubernetesService) Scale(_ context.Context, _ string, nodeSize int) error {
 	f.scaledTo = append(f.scaledTo, nodeSize)
+	f.operations = append(f.operations, "scale")
 	return f.scaleErr
+}
+func (f *fakeKubernetesService) Upgrade(_ context.Context, _ string, req kubernetes.UpgradeRequest) error {
+	f.planUpgrades = append(f.planUpgrades, req.Plan)
+	f.operations = append(f.operations, "plan")
+	return f.upgradeErr
+}
+func (f *fakeKubernetesService) UpgradeVersion(_ context.Context, _ string, req kubernetes.UpgradeVersionRequest) error {
+	f.versionUpgrades = append(f.versionUpgrades, req.Slug)
+	f.operations = append(f.operations, "version")
+	return f.upgradeErr
 }
 func (f *fakeKubernetesService) Delete(_ context.Context, slug string) error {
 	f.deleted = append(f.deleted, slug)
@@ -214,6 +234,85 @@ func TestKubernetesResource_updateScalesWorkers(t *testing.T) {
 	}
 	if got.Workers.ValueInt64() != 5 {
 		t.Errorf("Workers = %d, want 5", got.Workers.ValueInt64())
+	}
+}
+
+func TestKubernetesResource_updateUpgradesVersionAndPlanInPlace(t *testing.T) {
+	restore := internalprovider.SetKubernetesPollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	svc := &fakeKubernetesService{
+		getQueue: []*kubernetes.Cluster{
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.36.1", RegionID: "region-yow", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.37.0", RegionID: "region-yow", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.37.0", RegionID: "region-yow", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.37.0", RegionID: "region-yow", NodeSize: 3},
+		},
+		versions: []kubernetes.KubernetesVersion{
+			{Slug: "v1370-yow", Version: "v1.37.0", RegionID: "region-yow", KubernetesClusterVersionID: "cluster-version-137"},
+		},
+	}
+	r := internalprovider.NewKubernetesClusterResourceWithService(svc)
+	schResp := kubernetesSchema(t)
+	tfType := kubernetesTFType(t)
+	stateVal := tftypes.NewValue(tfType, kubernetesValues(t, "k8s1-abc", 3))
+	planValues := kubernetesValues(t, "k8s1-abc", 3)
+	planValues["version"] = tftypes.NewValue(tftypes.String, "v1.37.0")
+	planValues["plan"] = tftypes.NewValue(tftypes.String, "k8s-hi-yow-1")
+	planVal := tftypes.NewValue(tfType, planValues)
+	updateReq := resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: schResp.Schema, Raw: planVal},
+		State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal},
+	}
+	updateResp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Update(context.Background(), updateReq, updateResp)
+	if updateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", updateResp.Diagnostics)
+	}
+	if len(svc.versionUpgrades) != 1 || svc.versionUpgrades[0] != "v1370-yow" {
+		t.Errorf("versionUpgrades = %v, want [v1370-yow]", svc.versionUpgrades)
+	}
+	if len(svc.planUpgrades) != 1 || svc.planUpgrades[0] != "k8s-hi-yow-1" {
+		t.Errorf("planUpgrades = %v, want [k8s-hi-yow-1]", svc.planUpgrades)
+	}
+	if len(svc.operations) != 2 || svc.operations[0] != "version" || svc.operations[1] != "plan" {
+		t.Errorf("operations = %v, want [version plan]", svc.operations)
+	}
+	// No worker change → no scaling.
+	if len(svc.scaledTo) != 0 {
+		t.Errorf("Scale should not be called, got %v", svc.scaledTo)
+	}
+}
+
+func TestKubernetesResource_updateWaitsBeforeScaleAfterPlanUpgrade(t *testing.T) {
+	restore := internalprovider.SetKubernetesPollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	svc := &fakeKubernetesService{
+		getQueue: []*kubernetes.Cluster{
+			{Slug: "k8s1-abc", State: "Upgrading", Version: "v1.36.1", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.36.1", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.36.1", NodeSize: 5, Meta: &kubernetes.ClusterMeta{Size: "5"}},
+		},
+	}
+	r := internalprovider.NewKubernetesClusterResourceWithService(svc)
+	schResp := kubernetesSchema(t)
+	tfType := kubernetesTFType(t)
+	stateVal := tftypes.NewValue(tfType, kubernetesValues(t, "k8s1-abc", 3))
+	planValues := kubernetesValues(t, "k8s1-abc", 5)
+	planValues["plan"] = tftypes.NewValue(tftypes.String, "k8s-hi-yow-1")
+	planVal := tftypes.NewValue(tfType, planValues)
+	updateReq := resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: schResp.Schema, Raw: planVal},
+		State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal},
+	}
+	updateResp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Update(context.Background(), updateReq, updateResp)
+	if updateResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", updateResp.Diagnostics)
+	}
+	if len(svc.operations) != 2 || svc.operations[0] != "plan" || svc.operations[1] != "scale" {
+		t.Errorf("operations = %v, want [plan scale]", svc.operations)
 	}
 }
 

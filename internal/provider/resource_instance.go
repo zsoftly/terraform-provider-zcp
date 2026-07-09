@@ -16,6 +16,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/instance"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/httpclient"
 )
 
@@ -27,7 +28,7 @@ var _ resource.ResourceWithValidateConfig = &instanceResource{}
 type instanceServiceIface interface {
 	Create(ctx context.Context, req instance.CreateRequest) (*instance.VirtualMachine, error)
 	Get(ctx context.Context, slug string) (*instance.VirtualMachine, error)
-	WaitForState(ctx context.Context, slug string, targetStates []string, pollInterval time.Duration) (*instance.VirtualMachine, error)
+	Meta(ctx context.Context, slug string) (*instance.VMMeta, error)
 	ActivityLogs(ctx context.Context, slug string) ([]instance.ActivityLog, error)
 	ChangeLabel(ctx context.Context, slug, name string) error
 	ChangePlan(ctx context.Context, slug string, req instance.ChangePlanRequest) (*instance.ActionResponse, error)
@@ -36,7 +37,7 @@ type instanceServiceIface interface {
 	DeleteTag(ctx context.Context, slug string, key string) error
 	Start(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Stop(ctx context.Context, slug string) (*instance.ActionResponse, error)
-	Delete(ctx context.Context, slug string, expunge bool) error
+	Delete(ctx context.Context, slug string, expunge, deletePublicIP bool) error
 }
 
 // instanceService adapts the zcp-cli instance.Service, overriding the rename
@@ -59,8 +60,17 @@ func (s *instanceService) ChangeLabel(ctx context.Context, slug, name string) er
 	return nil
 }
 
+// publicIPLister resolves a VM's public address from the account IP list. With
+// source-NAT networks the address belongs to the network, so the VM object's
+// public_ip stays empty (platform behavior; the CLI has the same gotcha), but
+// the IP list associates the address with the VM.
+type publicIPLister interface {
+	List(ctx context.Context, vpcSlug, region, project string) ([]ipaddress.IPAddress, error)
+}
+
 type instanceResource struct {
 	svc            instanceServiceIface
+	ipSvc          publicIPLister
 	defaultProject string
 }
 
@@ -188,7 +198,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"public_ip": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Public IP address of the instance, if assigned.",
+				MarkdownDescription: "Public IP address of the instance, if assigned. When the address belongs to the network (source-NAT), the provider resolves it from the account IP list, since the platform leaves it off the VM object.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -211,6 +221,7 @@ func (r *instanceResource) Configure(_ context.Context, req resource.ConfigureRe
 		return
 	}
 	r.svc = &instanceService{Service: instance.NewService(pd.Client), client: pd.Client}
+	r.ipSvc = ipaddress.NewService(pd.Client)
 	r.defaultProject = pd.DefaultProject
 }
 
@@ -221,6 +232,57 @@ func isRunning(state string) bool {
 
 // applyVMState populates the computed attributes (id/slug/state/IPs) from a VM.
 // It does NOT touch tags (the API never returns them) and does not manage power.
+// Post-Running private-IP wait tunables. The platform records the private IP
+// shortly after the VM reaches Running; vars so tests can shorten the wait.
+var (
+	privateIPPollInterval = 10 * time.Second
+	privateIPPollWindow   = 2 * time.Minute
+)
+
+// resolvePublicIP returns the VM's public address from the IP list, preferring
+// a static assignment over the network's source-NAT address. Best effort: ""
+// when the lister is unavailable, errors, or finds nothing.
+func (r *instanceResource) resolvePublicIP(ctx context.Context, vmID, region, project string) string {
+	if r.ipSvc == nil || vmID == "" {
+		return ""
+	}
+	ips, err := r.ipSvc.List(ctx, "", region, project)
+	if err != nil {
+		return ""
+	}
+	sourceNAT := ""
+	for i := range ips {
+		if ips[i].VirtualMachineID != vmID || ips[i].IPAddress == "" {
+			continue
+		}
+		if !strings.EqualFold(ips[i].Strategy, "source-nat") {
+			return ips[i].IPAddress
+		}
+		if sourceNAT == "" {
+			sourceNAT = ips[i].IPAddress
+		}
+	}
+	return sourceNAT
+}
+
+// fillPublicIP resolves public_ip from the IP list when the VM object carries
+// none. Skipped when the config opted out of a public IP.
+func (r *instanceResource) fillPublicIP(ctx context.Context, model *instanceResourceModel, vm *instance.VirtualMachine) {
+	if model.PublicIP.ValueString() != "" {
+		return
+	}
+	if !model.AssignPublicIP.IsNull() && !model.AssignPublicIP.IsUnknown() && !model.AssignPublicIP.ValueBool() {
+		return
+	}
+	project := r.defaultProject
+	if !model.Project.IsNull() && !model.Project.IsUnknown() {
+		project = model.Project.ValueString()
+	}
+	if ip := r.resolvePublicIP(ctx, vm.ID, model.Region.ValueString(), project); ip != "" {
+		model.PublicIP = types.StringValue(ip)
+	}
+}
+
 func (r *instanceResource) applyVMState(model *instanceResourceModel, vm *instance.VirtualMachine) {
 	model.ID = types.StringValue(vm.Slug)
 	model.Slug = types.StringValue(vm.Slug)
@@ -324,7 +386,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
 	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
-		r.cleanupAfterFailedCreate(ctx, slug, &resp.Diagnostics)
+		r.cleanupAfterFailedCreate(ctx, slug, isPublic, &resp.Diagnostics)
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
@@ -352,6 +414,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	r.applyVMState(&model, ready)
+	r.fillPublicIP(ctx, &model, ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -378,6 +441,7 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 
 	model.Name = types.StringValue(vm.Name)
 	r.applyVMState(&model, vm)
+	r.fillPublicIP(ctx, &model, vm)
 	// tags are not refreshed (the API does not return them); preserved from state.
 	// cloud_provider, region, template, plan, billing_cycle, project, ssh_key,
 	// network_plan, storage_category, user_data are create/update inputs preserved
@@ -464,50 +528,34 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		return
 	}
 	r.applyVMState(&plan, vm)
+	r.fillPublicIP(ctx, &plan, vm)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
 // waitForRunning polls the instance until it reports Running (returning it) or a
-// terminal provisioning state. Polling on the instance state, rather than
-// delegating to the CLI's WaitForState (which only matches the target state),
-// lets a failed provision error out in seconds instead of blocking for the full
-// create timeout.
+// terminal provisioning state. The state comes from the /meta endpoint, which
+// forces a live reconcile against the hypervisor and is authoritative; the
+// cached Get/List state can keep reporting "Starting" for many minutes after
+// the VM is actually up (the CMP's background reconciliation is unreliable).
+// The VM.CREATE activity log is still checked so a failed provisioning job
+// errors out in seconds instead of blocking for the full create timeout.
 func (r *instanceResource) waitForRunning(ctx context.Context, slug string) (*instance.VirtualMachine, error) {
-	var latest *instance.VirtualMachine
 	err := pollUntilReady(ctx, 10*time.Second, func(ctx context.Context) (bool, error) {
-		// Primary signal: the VM.CREATE activity log. It reflects the CloudStack
-		// provisioning job and flips to SUCCESS when the VM is actually up
-		// (~2-3 min). The cached `state` field, by contrast, lags ~18 min before it
-		// syncs to "Running" (it only refreshes on a background sync or a UI view),
-		// so polling `state` would block for the full create timeout on a VM that
-		// is already running.
 		if logs, lerr := r.svc.ActivityLogs(ctx, slug); lerr == nil {
 			switch strings.ToUpper(createLogStatus(logs)) {
-			case "SUCCESS":
-				vm, gerr := r.svc.Get(ctx, slug)
-				if gerr != nil {
-					return false, gerr
-				}
-				// The state field is likely still the stale "Starting"; the log
-				// confirms the VM is up, so report it as Running.
-				vm.State = "Running"
-				latest = vm
-				return true, nil
 			case "FAILED", "ERROR":
 				return false, fmt.Errorf("instance provisioning failed (VM.CREATE activity log status: %s)", createLogStatus(logs))
 			}
 		}
-		// Fallback: if the activity log is unavailable, trust the state field.
-		vm, err := r.svc.Get(ctx, slug)
+		meta, err := r.svc.Meta(ctx, slug)
 		if err != nil {
 			return false, err
 		}
-		latest = vm
-		switch strings.ToLower(vm.State) {
+		switch strings.ToLower(meta.State) {
 		case "running":
 			return true, nil
 		case "error", "failed", "destroyed", "expunging", "expunged":
-			return false, fmt.Errorf("instance entered state %q", vm.State)
+			return false, fmt.Errorf("instance entered state %q", meta.State)
 		default:
 			return false, nil
 		}
@@ -515,7 +563,32 @@ func (r *instanceResource) waitForRunning(ctx context.Context, slug string) (*in
 	if err != nil {
 		return nil, err
 	}
-	return latest, nil
+	// Re-read the full object for the computed fields. Calling /meta also
+	// reconciled the stored state, but Get can still be momentarily stale, so
+	// the authoritative state is pinned. The platform records the private IP
+	// shortly after Running, so wait briefly for it to land in state at apply
+	// time instead of on the next refresh. Best effort: a create is never
+	// failed over a missing address.
+	var vm *instance.VirtualMachine
+	ipCtx, cancel := context.WithTimeout(ctx, privateIPPollWindow)
+	defer cancel()
+	_ = pollUntilReady(ipCtx, privateIPPollInterval, func(ctx context.Context) (bool, error) {
+		v, gerr := r.svc.Get(ctx, slug)
+		if gerr != nil {
+			return false, gerr
+		}
+		vm = v
+		return v.NetworkPrivateIP() != "", nil
+	})
+	if vm == nil {
+		v, gerr := r.svc.Get(ctx, slug)
+		if gerr != nil {
+			return nil, gerr
+		}
+		vm = v
+	}
+	vm.State = "Running"
+	return vm, nil
 }
 
 // createLogStatus returns the status of the VM.CREATE activity-log entry, or ""
@@ -554,29 +627,28 @@ func (r *instanceResource) latestActionTime(ctx context.Context, slug string) st
 }
 
 // waitForPowerState waits until the instance reaches targetState ("Stopped" or
-// "Running") after a stop/start. It prefers the VM.ACTION activity log — which
-// reflects the real CloudStack job and flips to SUCCESS promptly — over the
-// cached state field, which can lag many minutes. baselineAction is the newest
-// VM.ACTION timestamp from before the operation was issued, so only a newer
-// action counts. It is safe by construction: it also returns once the cached
-// state reaches the target, preserving correctness if the log is unavailable.
+// "Running") after a stop/start. The state comes from the /meta endpoint,
+// which reconciles live against the hypervisor; the cached Get state can lag
+// many minutes behind a power change. The VM.ACTION activity log is still
+// checked for a failed job, which /meta cannot signal (a failed stop just
+// keeps reporting the old state until the timeout). baselineAction is the
+// newest VM.ACTION timestamp from before the operation was issued, so a stale
+// prior action is never mistaken for the new one.
 func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetState, baselineAction string) error {
 	return pollUntilReady(ctx, 10*time.Second, func(ctx context.Context) (bool, error) {
 		if logs, lerr := r.svc.ActivityLogs(ctx, slug); lerr == nil {
 			if status, at := latestAction(logs); at != "" && at != baselineAction {
 				switch strings.ToUpper(status) {
-				case "SUCCESS":
-					return true, nil
 				case "FAILED", "ERROR":
 					return false, fmt.Errorf("instance failed to reach %s (VM.ACTION status: %s)", targetState, status)
 				}
 			}
 		}
-		vm, gerr := r.svc.Get(ctx, slug)
+		meta, gerr := r.svc.Meta(ctx, slug)
 		if gerr != nil {
 			return false, gerr
 		}
-		return strings.EqualFold(vm.State, targetState), nil
+		return strings.EqualFold(meta.State, targetState), nil
 	})
 }
 
@@ -584,8 +656,8 @@ func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetSt
 // but cannot be saved to state because a later create step failed. A cleanup
 // failure is surfaced as a warning (the original error is reported by the caller)
 // so the user knows a manual delete may be needed.
-func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, diags *diag.Diagnostics) {
-	if err := r.svc.Delete(ctx, slug, true); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, deletePublicIP bool, diags *diag.Diagnostics) {
+	if err := r.svc.Delete(ctx, slug, true, deletePublicIP); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		diags.AddWarning(
 			"Orphaned instance not cleaned up",
 			fmt.Sprintf("instance %s was created but provisioning failed, and the cleanup delete also failed: %s. Delete it manually to avoid an orphan.", slug, err.Error()),
@@ -714,9 +786,18 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 	defer cancel()
 
 	slug := model.ID.ValueString()
+	// delete_public_ip asks the API to release the IP it auto-assigned at create
+	// so destroy does not strand a billed address. The live API currently ignores
+	// the flag (the CMP IP-release endpoint rejects token auth, a known
+	// platform bug with a fix in progress), so the IP stays Allocated until it is
+	// released manually. The flag is still sent so destroy heals automatically
+	// once the platform fix lands. Only set when this resource requested the
+	// auto-assignment (assign_public_ip defaults to true, mirroring Create). An IP
+	// attached via zcp_ip_address/zcp_ip_association is owned by those resources.
+	deletePublicIP := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
 	// expunge=true forces an immediate purge so the slug does not linger in a
 	// soft-deleted state (which would otherwise make pollUntilGone time out).
-	err := r.svc.Delete(deleteCtx, slug, true)
+	err := r.svc.Delete(deleteCtx, slug, true, deletePublicIP)
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete instance", err.Error())
 		return

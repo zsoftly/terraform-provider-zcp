@@ -23,10 +23,15 @@ var _ resource.Resource = &kubernetesClusterResource{}
 var _ resource.ResourceWithConfigure = &kubernetesClusterResource{}
 var _ resource.ResourceWithImportState = &kubernetesClusterResource{}
 
+var kubernetesPollInterval = 15 * time.Second
+
 type kubernetesServiceIface interface {
 	Create(ctx context.Context, req kubernetes.CreateRequest) (*kubernetes.Cluster, error)
 	Get(ctx context.Context, slug string) (*kubernetes.Cluster, error)
+	ListVersions(ctx context.Context) ([]kubernetes.KubernetesVersion, error)
 	Scale(ctx context.Context, slug string, nodeSize int) error
+	Upgrade(ctx context.Context, slug string, req kubernetes.UpgradeRequest) error
+	UpgradeVersion(ctx context.Context, clusterSlug string, req kubernetes.UpgradeVersionRequest) error
 	Delete(ctx context.Context, slug string) error
 }
 
@@ -68,7 +73,7 @@ func (r *kubernetesClusterResource) Metadata(_ context.Context, req resource.Met
 func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP managed Kubernetes cluster. Create blocks until the cluster reaches the `Running` state; changing `workers` scales the cluster in place.",
+		MarkdownDescription: "Manages a ZCP managed Kubernetes cluster. Create blocks until the cluster reaches the `Running` state; changing `version`, `plan`, or `workers` updates the cluster in place.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -92,13 +97,11 @@ func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.Schem
 			},
 			"version": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Kubernetes version (e.g. `v1.36.1`). Changing this forces replacement.",
-				PlanModifiers:       requiresReplace,
+				MarkdownDescription: "Kubernetes version slug (e.g. `v1.36.1`). Changing this upgrades the cluster in place.",
 			},
 			"plan": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Cluster node plan slug (e.g. `k8s-li-yow-1`). Changing this forces replacement.",
-				PlanModifiers:       requiresReplace,
+				MarkdownDescription: "Cluster node plan slug (e.g. `k8s-li-yow-1`). Changing this upgrades the cluster in place.",
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
@@ -303,7 +306,7 @@ func (r *kubernetesClusterResource) Create(ctx context.Context, req resource.Cre
 // terminal failure state.
 func (r *kubernetesClusterResource) waitForRunning(ctx context.Context, slug string) (*kubernetes.Cluster, error) {
 	var latest *kubernetes.Cluster
-	err := pollUntilReady(ctx, 15*time.Second, func(ctx context.Context) (bool, error) {
+	err := pollUntilReady(ctx, kubernetesPollInterval, func(ctx context.Context) (bool, error) {
 		c, err := r.svc.Get(ctx, slug)
 		if err != nil {
 			return false, err
@@ -333,7 +336,7 @@ func (r *kubernetesClusterResource) waitForRunning(ctx context.Context, slug str
 // check only when the count already matches.
 func (r *kubernetesClusterResource) waitForScale(ctx context.Context, slug string, desired int64) (*kubernetes.Cluster, error) {
 	var latest *kubernetes.Cluster
-	err := pollUntilReady(ctx, 15*time.Second, func(ctx context.Context) (bool, error) {
+	err := pollUntilReady(ctx, kubernetesPollInterval, func(ctx context.Context) (bool, error) {
 		c, err := r.svc.Get(ctx, slug)
 		if err != nil {
 			return false, err
@@ -343,6 +346,100 @@ func (r *kubernetesClusterResource) waitForScale(ctx context.Context, slug strin
 			return false, fmt.Errorf("cluster entered state %q", c.State)
 		}
 		return c.State == "Running" && clusterWorkers(c) == desired, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return latest, nil
+}
+
+func clusterVersionMatches(c *kubernetes.Cluster, target kubernetes.KubernetesVersion) bool {
+	if c.Version == target.Version || c.Version == target.Slug {
+		return true
+	}
+	if c.Meta == nil {
+		return false
+	}
+	return c.Meta.KubernetesVersionName == target.Version ||
+		c.Meta.KubernetesVersionName == target.Name ||
+		c.Meta.KubernetesVersionID == target.KubernetesClusterVersionID ||
+		c.Meta.KubernetesVersionID == target.ID
+}
+
+func (r *kubernetesClusterResource) resolveVersionForCluster(ctx context.Context, c *kubernetes.Cluster, desired string) (kubernetes.KubernetesVersion, error) {
+	versions, err := r.svc.ListVersions(ctx)
+	if err != nil {
+		return kubernetes.KubernetesVersion{}, err
+	}
+
+	regionID := c.RegionID
+	if regionID == "" && c.Region != nil {
+		regionID = c.Region.ID
+	}
+
+	var fallback *kubernetes.KubernetesVersion
+	for i := range versions {
+		v := versions[i]
+		if v.Slug != desired && v.Version != desired {
+			continue
+		}
+		if regionID == "" || v.RegionID == regionID {
+			return v, nil
+		}
+		if fallback == nil {
+			fallback = &v
+		}
+	}
+	if fallback != nil {
+		return *fallback, nil
+	}
+	return kubernetes.KubernetesVersion{}, fmt.Errorf("kubernetes version %q is not available for this cluster", desired)
+}
+
+func (r *kubernetesClusterResource) waitForVersion(ctx context.Context, slug string, target kubernetes.KubernetesVersion) (*kubernetes.Cluster, error) {
+	var latest *kubernetes.Cluster
+	err := pollUntilReady(ctx, kubernetesPollInterval, func(ctx context.Context) (bool, error) {
+		c, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		latest = c
+		if c.State == "Error" || c.State == "Failed" {
+			return false, fmt.Errorf("cluster entered state %q", c.State)
+		}
+		return c.State == "Running" && clusterVersionMatches(c, target), nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return latest, nil
+}
+
+// waitForPostActionRunning waits for a lifecycle action that does not expose a
+// directly comparable target field in the cluster response. The first Running
+// read is treated as pre-action state and one extra poll is required, giving the
+// control plane time to move through its transient state before the next action.
+func (r *kubernetesClusterResource) waitForPostActionRunning(ctx context.Context, slug string) (*kubernetes.Cluster, error) {
+	var latest *kubernetes.Cluster
+	seenFirstRunning := false
+	err := pollUntilReady(ctx, kubernetesPollInterval, func(ctx context.Context) (bool, error) {
+		c, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		latest = c
+		if c.State == "Error" || c.State == "Failed" {
+			return false, fmt.Errorf("cluster entered state %q", c.State)
+		}
+		if c.State != "Running" {
+			seenFirstRunning = true
+			return false, nil
+		}
+		if !seenFirstRunning {
+			seenFirstRunning = true
+			return false, nil
+		}
+		return true, nil
 	})
 	if err != nil {
 		return nil, err
@@ -394,8 +491,9 @@ func (r *kubernetesClusterResource) Read(ctx context.Context, req resource.ReadR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-// Update scales the worker count in place. `workers` is the only mutable
-// attribute (everything else is RequiresReplace).
+// Update applies mutable lifecycle changes one at a time. The API rejects
+// concurrent lifecycle actions, so each asynchronous request must settle before
+// the next request is sent.
 func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.UpdateRequest, resp *resource.UpdateResponse) {
 	var model kubernetesClusterResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
@@ -423,6 +521,56 @@ func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.Upd
 	slug := state.ID.ValueString()
 	desired := int(model.Workers.ValueInt64())
 
+	// ready carries the freshest cluster read from whichever lifecycle action
+	// ran last, so computed fields are written from live data, not stale state.
+	var ready *kubernetes.Cluster
+
+	// Version upgrade first: upgrading nodes before resizing them keeps both
+	// operations independent, and the API rejects concurrent lifecycle actions.
+	if model.Version.ValueString() != state.Version.ValueString() {
+		current, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to read Kubernetes cluster before version upgrade", err.Error())
+			return
+		}
+		target, err := r.resolveVersionForCluster(ctx, current, model.Version.ValueString())
+		if err != nil {
+			resp.Diagnostics.AddError("Failed to resolve Kubernetes version", err.Error())
+			return
+		}
+		if err := r.svc.UpgradeVersion(ctx, slug, kubernetes.UpgradeVersionRequest{
+			Slug: target.Slug,
+		}); err != nil {
+			resp.Diagnostics.AddError("Failed to upgrade Kubernetes version", err.Error())
+			return
+		}
+		upgraded, err := r.waitForVersion(ctx, slug, target)
+		if err != nil {
+			resp.Diagnostics.AddError("Kubernetes version upgrade did not complete", err.Error())
+			return
+		}
+		ready = upgraded
+	}
+
+	if model.Plan.ValueString() != state.Plan.ValueString() {
+		if err := r.svc.Upgrade(ctx, slug, kubernetes.UpgradeRequest{
+			Plan:         model.Plan.ValueString(),
+			Slug:         slug,
+			BillingCycle: model.BillingCycle.ValueString(),
+			IsCustomPlan: false,
+			CustomPlan:   nil,
+		}); err != nil {
+			resp.Diagnostics.AddError("Failed to change Kubernetes cluster plan", err.Error())
+			return
+		}
+		var err error
+		ready, err = r.waitForPostActionRunning(ctx, slug)
+		if err != nil {
+			resp.Diagnostics.AddError("Kubernetes plan upgrade did not complete", err.Error())
+			return
+		}
+	}
+
 	if desired != int(state.Workers.ValueInt64()) {
 		if err := r.svc.Scale(ctx, slug, desired); err != nil {
 			resp.Diagnostics.AddError("Failed to scale Kubernetes cluster", err.Error())
@@ -447,12 +595,16 @@ func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.Upd
 		return
 	}
 
-	// No worker change — preserve computed values from state.
-	model.ID = state.ID
-	model.Slug = state.Slug
-	model.State = state.State
-	model.APIEndpoint = state.APIEndpoint
-	model.IPAddress = state.IPAddress
+	if ready != nil {
+		r.applyClusterState(&model, ready)
+	} else {
+		// No lifecycle action changed the computed fields.
+		model.ID = state.ID
+		model.Slug = state.Slug
+		model.State = state.State
+		model.APIEndpoint = state.APIEndpoint
+		model.IPAddress = state.IPAddress
+	}
 	model.ControlNodes = state.ControlNodes
 	model.HA = state.HA
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
@@ -483,7 +635,7 @@ func (r *kubernetesClusterResource) Delete(ctx context.Context, req resource.Del
 		return
 	}
 
-	if err := pollUntilGone(deleteCtx, 15*time.Second, func(ctx context.Context) (bool, error) {
+	if err := pollUntilGone(deleteCtx, kubernetesPollInterval, func(ctx context.Context) (bool, error) {
 		_, err := r.svc.Get(ctx, slug)
 		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
