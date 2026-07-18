@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
@@ -20,6 +21,7 @@ import (
 var _ resource.Resource = &dnsRecordResource{}
 var _ resource.ResourceWithConfigure = &dnsRecordResource{}
 var _ resource.ResourceWithImportState = &dnsRecordResource{}
+var _ resource.ResourceWithValidateConfig = &dnsRecordResource{}
 
 // dnsRecordDeleter removes an RRset by name and type. The live DNS API models
 // records as PowerDNS RRsets without numeric IDs (verified 2026-07-05), so
@@ -42,6 +44,7 @@ type dnsRecordResourceModel struct {
 	Type     types.String   `tfsdk:"type"`
 	Content  types.String   `tfsdk:"content"`
 	TTL      types.Int64    `tfsdk:"ttl"`
+	Priority types.Int64    `tfsdk:"priority"`
 	FQDN     types.String   `tfsdk:"fqdn"`
 	Timeouts timeouts.Value `tfsdk:"timeouts"`
 }
@@ -77,17 +80,22 @@ func (r *dnsRecordResource) Schema(ctx context.Context, _ resource.SchemaRequest
 			},
 			"type": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Record type: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, or `SRV`. Changing this forces replacement.",
+				MarkdownDescription: "Record type: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, or `NS`. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"content": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Record content (e.g. an IPv4 address for `A`). Write-only: the API does not return content in a comparable form, so out-of-band content changes are not detected. Changing this forces replacement.",
+				MarkdownDescription: "Record content (e.g. an IPv4 address for `A`, or the mail server for `MX`). Write-only: the API does not return content in a comparable form, so out-of-band content changes are not detected. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"ttl": schema.Int64Attribute{
 				Required:            true,
 				MarkdownDescription: "Time to live in seconds (e.g. `3600`). Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
+			"priority": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Preference value for `MX` records (0-65535, e.g. `10`). Required for `MX` and rejected for every other type. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"fqdn": schema.StringAttribute{
@@ -117,6 +125,43 @@ func (r *dnsRecordResource) Configure(_ context.Context, req resource.ConfigureR
 	svc := dns.NewService(pd.Client)
 	r.svc = svc
 	r.deleter = svc
+}
+
+// ValidateConfig enforces the priority rules at plan time. Priority applies
+// only to MX records: the backend requires it there and rejects it elsewhere.
+// Values referencing unknown outputs are skipped and left to apply time.
+func (r *dnsRecordResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
+	var model dnsRecordResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() || model.Type.IsUnknown() {
+		return
+	}
+
+	isMX := strings.EqualFold(model.Type.ValueString(), "MX")
+	prioritySet := !model.Priority.IsNull() && !model.Priority.IsUnknown()
+
+	switch {
+	case isMX && model.Priority.IsNull():
+		resp.Diagnostics.AddAttributeError(
+			path.Root("priority"),
+			"Missing priority for MX record",
+			"MX records require `priority` (0-65535, e.g. 10). Set it in `priority`.",
+		)
+	case !isMX && prioritySet:
+		resp.Diagnostics.AddAttributeError(
+			path.Root("priority"),
+			"priority is only valid for MX records",
+			fmt.Sprintf("`priority` was set on a %q record. Remove it, or change `type` to MX.", model.Type.ValueString()),
+		)
+	case prioritySet:
+		if p := model.Priority.ValueInt64(); p < 0 || p > 65535 {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("priority"),
+				"priority out of range",
+				"`priority` must be between 0 and 65535.",
+			)
+		}
+	}
 }
 
 // matchRecord reports whether a stored record matches the given fqdn and type.
@@ -150,12 +195,20 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 	domainSlug := model.Domain.ValueString()
 	recType := model.Type.ValueString()
 
-	if _, err := r.svc.CreateRecord(ctx, domainSlug, dns.CreateRecordRequest{
+	createReq := dns.CreateRecordRequest{
 		Name:    model.Name.ValueString(),
 		Type:    recType,
 		Content: model.Content.ValueString(),
 		TTL:     int(model.TTL.ValueInt64()),
-	}); err != nil {
+	}
+	// MX records send priority in a separate field the backend requires. Other
+	// types must omit it. ValidateConfig has already enforced this.
+	if !model.Priority.IsNull() && !model.Priority.IsUnknown() {
+		p := int(model.Priority.ValueInt64())
+		createReq.Priority = &p
+	}
+
+	if _, err := r.svc.CreateRecord(ctx, domainSlug, createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create DNS record", err.Error())
 		return
 	}
@@ -233,8 +286,9 @@ func (r *dnsRecordResource) Read(ctx context.Context, req resource.ReadRequest, 
 			if rec.TTL != 0 {
 				model.TTL = types.Int64Value(int64(rec.TTL))
 			}
-			// content is write-only: the API returns record contents in a
-			// backend-specific shape the SDK does not surface.
+			// content and priority are write-only: the API returns record
+			// contents in a backend-specific shape (MX folds priority into
+			// content) the SDK does not surface, so both stay as configured.
 			model.FQDN = types.StringValue(fqdn)
 			model.ID = types.StringValue(strings.ToUpper(recType) + "/" + fqdn)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)

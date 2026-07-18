@@ -38,6 +38,16 @@ resource "zcp_dns_record" "spf" {
   content = "\"v=spf1 -all\""
   ttl     = 3600
 }
+
+# MX record: priority is required and goes in its own argument.
+resource "zcp_dns_record" "mx" {
+  domain   = zcp_dns_domain.example.id
+  name     = "@"
+  type     = "MX"
+  content  = "mail.example.com."
+  priority = 10
+  ttl      = 3600
+}
 ```
 
 ## Import
@@ -56,15 +66,18 @@ terraform import zcp_dns_record.www example-com/A/www
 - `domain` (String) Parent DNS domain slug. Changing this forces replacement.
 - `name` (String) Relative record name (e.g. `www`), or `@` for the zone apex.
   The zone is appended by the backend. Changing this forces replacement.
-- `type` (String) Record type: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, `NS`, or
-  `SRV`. Changing this forces replacement.
-- `content` (String) Record content (e.g. an IPv4 address for `A`). Write-only.
+- `type` (String) Record type: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, or `NS`.
   Changing this forces replacement.
+- `content` (String) Record content (e.g. an IPv4 address for `A`, or the mail
+  server for `MX`). Write-only. Changing this forces replacement.
 - `ttl` (Number) Time to live in seconds (e.g. `3600`). Changing this forces
   replacement.
 
 ### Optional
 
+- `priority` (Number) Preference value for `MX` records (0-65535, e.g. `10`).
+  Required for `MX` and rejected for every other type. Changing this forces
+  replacement.
 - `timeouts` (Block) Configurable `create` and `delete` timeouts.
 
 ### Read-Only
