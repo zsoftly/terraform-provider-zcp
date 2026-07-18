@@ -1,4 +1,30 @@
-# terraform-provider-zcp v0.1.0 Release Notes
+# terraform-provider-zcp Release Notes
+
+## v0.1.1 (2026-07-18)
+
+A bug-fix release. Destroying a resource now releases the public IP it created,
+instead of leaving it allocated.
+
+- `zcp_instance` destroy releases the VM's auto-assigned public IP through the
+  service-cancellation workflow. Set `assign_public_ip = false` to create the
+  instance without an auto-assigned public IP.
+- `zcp_load_balancer` destroy deletes the load balancer through the
+  service-cancellation workflow instead of the direct delete endpoint, which
+  could report success without removing it. Destroy waits for the balancer to be
+  gone and re-issues the cancellation if the platform stalls it (which it can do
+  when the balancer's cancellation runs at the same time as another service's
+  teardown). It then releases the public IP the balancer acquired
+  (`acquire_new_ip = true`, the default); if that release fails, destroy fails
+  with an error naming the IP instead of leaving it allocated. A network
+  source-NAT IP is never released, since the network owns it, and a bound
+  `ip_address` is left to its own resource.
+
+Built on the zcp-cli SDK v0.0.24. Verified end to end with Terraform and
+OpenTofu.
+
+---
+
+## v0.1.0 (2026-07-07)
 
 First release of the ZCP provider for Terraform and OpenTofu. It manages the
 ZSoftly Cloud Platform with 38 resources and 12 data sources, covering
@@ -89,15 +115,13 @@ reference, import format, and a runnable example under `examples/`.
 
 ## Known platform behaviors
 
-- Deleting an instance does not release its auto-assigned public IP: the
-  platform's IP-release endpoint rejects token auth (a known CMP bug with a fix
-  in progress). The provider already sends the release request, so destroy heals
-  automatically once the fix lands. Until then, release the IP manually with
-  `zcp ip release <ip-slug>`.
+- Deleting an instance releases its auto-assigned public IP through the
+  service-cancellation workflow, so destroy does not leave a billable address. A
+  public IP bound through `zcp_ip_address`/`zcp_ip_association` is left to its
+  own resource.
 - The platform's cached instance state lags behind reality, sometimes by many
-  minutes. The provider polls the live `/meta` endpoint (SDK v0.0.23), which
-  reconciles against the hypervisor, so creates and resizes finish as soon as
-  the VM is up.
+  minutes. The provider polls the live `/meta` endpoint, which reconciles
+  against the hypervisor, so creates and resizes finish as soon as the VM is up.
 - On some networks, egress rule creation returns success while the backend
   creates nothing. The provider polls the rule list and fails loudly instead of
   recording a nonexistent rule.

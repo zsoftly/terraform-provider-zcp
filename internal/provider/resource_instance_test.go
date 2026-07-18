@@ -33,7 +33,12 @@ type fakeInstanceService struct {
 	expunged        []bool
 	deletedPublicIP []bool
 	deleteErr       error
-	getCalls        int
+	// service-cancellation capture (the delete path routes through Cancel)
+	canceled         []string
+	canceledPublicIP []bool
+	canceledCycle    []string
+	cancelErr        error
+	getCalls         int
 
 	// update-path capture
 	renamedTo     string
@@ -151,6 +156,13 @@ func (f *fakeInstanceService) Delete(_ context.Context, slug string, expunge, de
 	f.expunged = append(f.expunged, expunge)
 	f.deletedPublicIP = append(f.deletedPublicIP, deletePublicIP)
 	return f.deleteErr
+}
+
+func (f *fakeInstanceService) Cancel(_ context.Context, slug string, deletePublicIP bool, billingCycle string) error {
+	f.canceled = append(f.canceled, slug)
+	f.canceledPublicIP = append(f.canceledPublicIP, deletePublicIP)
+	f.canceledCycle = append(f.canceledCycle, billingCycle)
+	return f.cancelErr
 }
 
 type instanceStateModel struct {
@@ -543,14 +555,11 @@ func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error when instance fails to provision")
 	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
-		t.Errorf("cleanup Delete called with %v, want [vm1-abc]", svc.deleted)
+	if len(svc.canceled) != 1 || svc.canceled[0] != "vm1-abc" {
+		t.Errorf("cleanup Cancel called with %v, want [vm1-abc]", svc.canceled)
 	}
-	if len(svc.expunged) != 1 || !svc.expunged[0] {
-		t.Errorf("cleanup Delete expunge = %v, want [true]", svc.expunged)
-	}
-	if len(svc.deletedPublicIP) != 1 || !svc.deletedPublicIP[0] {
-		t.Errorf("cleanup Delete deletePublicIP = %v, want [true]", svc.deletedPublicIP)
+	if len(svc.canceledPublicIP) != 1 || !svc.canceledPublicIP[0] {
+		t.Errorf("cleanup Cancel deletePublicIP = %v, want [true]", svc.canceledPublicIP)
 	}
 }
 
@@ -634,13 +643,16 @@ func TestInstanceResource_deleteHappyPath(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-abc" {
-		t.Errorf("Delete called with %v, want [vm1-abc]", svc.deleted)
+	if len(svc.canceled) != 1 || svc.canceled[0] != "vm1-abc" {
+		t.Errorf("Cancel called with %v, want [vm1-abc]", svc.canceled)
 	}
 	// assign_public_ip is unset in state → defaults to true, so destroy must
-	// release the auto-assigned public IP rather than strand it.
-	if len(svc.deletedPublicIP) != 1 || !svc.deletedPublicIP[0] {
-		t.Errorf("Delete deletePublicIP = %v, want [true]", svc.deletedPublicIP)
+	// release the auto-assigned public IP (via service-cancel) rather than strand it.
+	if len(svc.canceledPublicIP) != 1 || !svc.canceledPublicIP[0] {
+		t.Errorf("Cancel deletePublicIP = %v, want [true]", svc.canceledPublicIP)
+	}
+	if len(svc.deleted) != 0 {
+		t.Errorf("direct Delete must not be used for destroy (it leaks the IP), got %v", svc.deleted)
 	}
 }
 
@@ -659,14 +671,14 @@ func TestInstanceResource_deleteKeepsIPWhenAssignPublicIPFalse(t *testing.T) {
 	if deleteResp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", deleteResp.Diagnostics)
 	}
-	if len(svc.deletedPublicIP) != 1 || svc.deletedPublicIP[0] {
-		t.Errorf("Delete deletePublicIP = %v, want [false]", svc.deletedPublicIP)
+	if len(svc.canceledPublicIP) != 1 || svc.canceledPublicIP[0] {
+		t.Errorf("Cancel deletePublicIP = %v, want [false]", svc.canceledPublicIP)
 	}
 }
 
 func TestInstanceResource_delete404IsNoOp(t *testing.T) {
 	svc := &fakeInstanceService{
-		deleteErr: &apierrors.APIError{StatusCode: 404},
+		cancelErr: &apierrors.APIError{StatusCode: 404},
 		getErr:    &apierrors.APIError{StatusCode: 404},
 	}
 	resp := deleteInstance(t, svc, "gone")

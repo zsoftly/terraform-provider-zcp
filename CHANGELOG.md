@@ -1,8 +1,38 @@
 # Changelog
 
-This file documents all notable changes to the ZCP Terraform provider. The
-format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
-project adheres to [Semantic Versioning](https://semver.org/).
+This file documents all notable changes to the ZCP provider for Terraform and
+OpenTofu. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
+to [Semantic Versioning](https://semver.org/).
+
+## [v0.1.1] - 2026-07-18
+
+### Changed
+
+- Upgraded the zcp-cli SDK from v0.0.23 to v0.0.24. Public IP and load balancer
+  listings now page through every result instead of stopping at the first page.
+
+### Fixed
+
+- `zcp_instance` destroy now releases the VM's auto-assigned public IP. It goes
+  through the service-cancellation workflow that the CMP Web UI runs, which
+  frees the IP as part of the deletion, so destroy no longer leaves a billable
+  address. A public IP bound through `zcp_ip_address`/`zcp_ip_association` is
+  left to its own resource. Set `assign_public_ip = false` to create the
+  instance without an auto-assigned public IP. Verified end to end with
+  Terraform and OpenTofu.
+- `zcp_load_balancer` destroy now deletes the load balancer through the
+  service-cancellation workflow the CMP Web UI runs, instead of the direct
+  delete endpoint, which could return success without removing the balancer.
+  Destroy waits for the balancer to be gone and re-issues the cancellation if
+  the platform stalls it, which it can do when the balancer's cancellation runs
+  at the same time as another service's teardown. Destroy then releases the
+  public IP the balancer acquired (`acquire_new_ip = true`, the default), which
+  was previously orphaned. If that release fails, destroy now fails with an
+  error naming the IP instead of leaving it allocated silently; an
+  already-released IP is treated as success. A network source-NAT IP is never
+  released, since the network owns it and frees it when the network is
+  destroyed. A public IP bound through `ip_address` is left to its own resource.
 
 ## [v0.1.0] - 2026-07-07
 

@@ -106,7 +106,7 @@ func (r *loadBalancerAttachmentResource) Configure(_ context.Context, req resour
 		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *ProviderData, got %T.", req.ProviderData))
 		return
 	}
-	r.svc = loadbalancer.NewService(pd.Client)
+	r.svc = &loadBalancerService{Service: loadbalancer.NewService(pd.Client), client: pd.Client}
 	r.defaultProject = pd.DefaultProject
 }
 

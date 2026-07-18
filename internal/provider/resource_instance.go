@@ -15,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
+	"github.com/zsoftly/zcp-cli/pkg/api/billing"
 	"github.com/zsoftly/zcp-cli/pkg/api/instance"
 	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/httpclient"
@@ -38,6 +39,7 @@ type instanceServiceIface interface {
 	Start(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Stop(ctx context.Context, slug string) (*instance.ActionResponse, error)
 	Delete(ctx context.Context, slug string, expunge, deletePublicIP bool) error
+	Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error
 }
 
 // instanceService adapts the zcp-cli instance.Service, overriding the rename
@@ -58,6 +60,38 @@ func (s *instanceService) ChangeLabel(ctx context.Context, slug, name string) er
 		return err
 	}
 	return nil
+}
+
+// Cancel deletes a VM through the unified service-cancellation workflow
+// (POST /billing/service-cancel-requests/{slug}) the CMP Web UI uses. Unlike the
+// direct DELETE endpoint (Service.Delete), this releases the VM's auto-assigned
+// public IP when deletePublicIP is set, so destroy does not strand a billed
+// address. Deletion is asynchronous; callers poll until the VM is gone.
+func (s *instanceService) Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error {
+	dip := deletePublicIP
+	req := billing.CancelServiceRequest{
+		ServiceName:    "Virtual Machine",
+		Reason:         "not_needed_anymore",
+		Type:           "Immediate",
+		Status:         "Pending",
+		BillingCycle:   billingCycle,
+		DeletePublicIP: &dip,
+	}
+	return billing.NewService(s.client).CancelService(ctx, slug, req)
+}
+
+// cancelBillingCycleUnit maps a billing-cycle value (hourly/monthly, or hour/month) to the
+// unit form the service-cancellation body expects. It defaults to "month" so a destroy is
+// never blocked by a missing or unexpected cycle value in state.
+func cancelBillingCycleUnit(v string) string {
+	switch low := strings.ToLower(strings.TrimSpace(v)); {
+	case strings.HasPrefix(low, "hour"):
+		return "hour"
+	case strings.HasPrefix(low, "month"):
+		return "month"
+	default:
+		return "month"
+	}
 }
 
 // publicIPLister resolves a VM's public address from the account IP list. With
@@ -386,7 +420,11 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
 	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
-		r.cleanupAfterFailedCreate(ctx, slug, isPublic, &resp.Diagnostics)
+		// waitForRunning may have failed because the create-timeout context expired, so
+		// run the cleanup on a fresh bounded context that can still cancel the instance.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		r.cleanupAfterFailedCreate(cleanupCtx, slug, isPublic, cancelBillingCycleUnit(model.BillingCycle.ValueString()), &resp.Diagnostics)
+		cleanupCancel()
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
@@ -656,8 +694,8 @@ func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetSt
 // but cannot be saved to state because a later create step failed. A cleanup
 // failure is surfaced as a warning (the original error is reported by the caller)
 // so the user knows a manual delete may be needed.
-func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, deletePublicIP bool, diags *diag.Diagnostics) {
-	if err := r.svc.Delete(ctx, slug, true, deletePublicIP); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, deletePublicIP bool, billingCycle string, diags *diag.Diagnostics) {
+	if err := r.svc.Cancel(ctx, slug, deletePublicIP, billingCycle); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		diags.AddWarning(
 			"Orphaned instance not cleaned up",
 			fmt.Sprintf("instance %s was created but provisioning failed, and the cleanup delete also failed: %s. Delete it manually to avoid an orphan.", slug, err.Error()),
@@ -786,18 +824,13 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	// delete_public_ip asks the API to release the IP it auto-assigned at create
-	// so destroy does not strand a billed address. The live API currently ignores
-	// the flag (the CMP IP-release endpoint rejects token auth, a known
-	// platform bug with a fix in progress), so the IP stays Allocated until it is
-	// released manually. The flag is still sent so destroy heals automatically
-	// once the platform fix lands. Only set when this resource requested the
-	// auto-assignment (assign_public_ip defaults to true, mirroring Create). An IP
+	// Delete through the service-cancellation workflow so the API releases the IP it
+	// auto-assigned at create (the direct DELETE endpoint ignores delete_public_ip and
+	// leaves the address Allocated/billable). Only release when this resource requested
+	// the auto-assignment (assign_public_ip defaults to true, mirroring Create). An IP
 	// attached via zcp_ip_address/zcp_ip_association is owned by those resources.
 	deletePublicIP := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
-	// expunge=true forces an immediate purge so the slug does not linger in a
-	// soft-deleted state (which would otherwise make pollUntilGone time out).
-	err := r.svc.Delete(deleteCtx, slug, true, deletePublicIP)
+	err := r.svc.Cancel(deleteCtx, slug, deletePublicIP, cancelBillingCycleUnit(model.BillingCycle.ValueString()))
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete instance", err.Error())
 		return

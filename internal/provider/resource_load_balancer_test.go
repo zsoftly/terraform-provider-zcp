@@ -11,24 +11,49 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/api/loadbalancer"
 
 	internalprovider "github.com/zsoftly/terraform-provider-zcp/internal/provider"
 )
 
+// fakeLBIPService satisfies lbIPServiceIface for the destroy IP-release path.
+type fakeLBIPService struct {
+	ips        []ipaddress.IPAddress
+	released   []string
+	releaseErr error
+}
+
+func (f *fakeLBIPService) List(_ context.Context, _, _, _ string) ([]ipaddress.IPAddress, error) {
+	return f.ips, nil
+}
+
+func (f *fakeLBIPService) Release(_ context.Context, slug string) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
+	f.released = append(f.released, slug)
+	return nil
+}
+
 // fakeLoadBalancerService satisfies loadBalancerServiceIface.
 type fakeLoadBalancerService struct {
-	lbs         []loadbalancer.LoadBalancer
-	created     *loadbalancer.LoadBalancer
-	createReq   loadbalancer.CreateRequest
-	err         error
-	deleted     []string
-	ruleReqs    []loadbalancer.CreateRuleRequest
-	rulesGone   []string
-	attachReqs  []loadbalancer.AttachVMRequest
-	detachedVMs []string
-	listRegion  string
-	listProject string
+	lbs           []loadbalancer.LoadBalancer
+	created       *loadbalancer.LoadBalancer
+	createReq     loadbalancer.CreateRequest
+	err           error
+	canceled      []string
+	canceledCycle string
+	// cancelUnsticksAfter models the platform wedge: the LB is removed (and later
+	// List calls report it gone) only once this many cancels have been issued. 0 or 1
+	// means the first cancel removes it.
+	cancelUnsticksAfter int
+	ruleReqs            []loadbalancer.CreateRuleRequest
+	rulesGone           []string
+	attachReqs          []loadbalancer.AttachVMRequest
+	detachedVMs         []string
+	listRegion          string
+	listProject         string
 }
 
 func (f *fakeLoadBalancerService) List(_ context.Context, region, project string) ([]loadbalancer.LoadBalancer, error) {
@@ -40,12 +65,16 @@ func (f *fakeLoadBalancerService) Create(_ context.Context, req loadbalancer.Cre
 	f.createReq = req
 	return f.created, f.err
 }
-func (f *fakeLoadBalancerService) Delete(_ context.Context, slug string) error {
-	f.deleted = append(f.deleted, slug)
-	if f.err == nil {
+func (f *fakeLoadBalancerService) Cancel(_ context.Context, slug, billingCycle string) error {
+	f.canceled = append(f.canceled, slug)
+	f.canceledCycle = billingCycle
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.canceled) >= f.cancelUnsticksAfter {
 		f.lbs = nil // gone on the next List so pollUntilGone finishes
 	}
-	return f.err
+	return nil
 }
 func (f *fakeLoadBalancerService) CreateRule(_ context.Context, _ string, req loadbalancer.CreateRuleRequest) error {
 	f.ruleReqs = append(f.ruleReqs, req)
@@ -184,6 +213,169 @@ func deleteLB(t *testing.T, svc *fakeLoadBalancerService, id string) resource.De
 	return deleteResp
 }
 
+// deleteLBIP runs Delete with both the LB and IP services. boundIP sets ip_address in
+// state (empty means the LB acquired its own IP).
+func deleteLBIP(t *testing.T, svc *fakeLoadBalancerService, ipSvc *fakeLBIPService, boundIP string) resource.DeleteResponse {
+	t.Helper()
+	r := internalprovider.NewLoadBalancerResourceWithServices(svc, ipSvc)
+	schResp := lbSchema(t)
+	stateVal := lbRaw(t, schResp, "web-lb-a1b2", "web-lb", "rule-1")
+	if boundIP != "" {
+		v := stateVal.Copy()
+		obj := map[string]tftypes.Value{}
+		_ = v.As(&obj)
+		obj["ip_address"] = tftypes.NewValue(tftypes.String, boundIP)
+		stateVal = tftypes.NewValue(v.Type(), obj)
+	}
+	deleteReq := resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	var deleteResp resource.DeleteResponse
+	r.Delete(context.Background(), deleteReq, &deleteResp)
+	return deleteResp
+}
+
+// TestLoadBalancerResource_deleteReleasesAcquiredIP verifies destroy releases the IP the LB
+// acquired itself (no bound ip_address) — otherwise it orphans a billable address.
+func TestLoadBalancerResource_deleteReleasesAcquiredIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+	}
+	// An attached LB IP reports an empty strategy; the gate is "not SOURCE-NAT".
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", IPAddress: "203.0.113.9", Strategy: ""}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(svc.canceled) != 1 {
+		t.Errorf("LB not canceled (deleted): %v", svc.canceled)
+	}
+	if len(ipSvc.released) != 1 || ipSvc.released[0] != "ip-1" {
+		t.Errorf("released = %v, want [ip-1] (the LB owned its acquired IP)", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteSkipsSourceNATIP verifies destroy never releases a network
+// source-NAT IP (the network owns it; releasing it would break the network).
+func TestLoadBalancerResource_deleteSkipsSourceNATIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-snat", IPAddress: "203.0.113.1"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-snat", Strategy: "SOURCE-NAT"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("released a SOURCE-NAT IP %v; the network owns it and it must never be released", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteKeepsBoundIP verifies destroy leaves a bound zcp_ip_address
+// alone — that IP is owned by its own resource.
+func TestLoadBalancerResource_deleteKeepsBoundIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "existing-ip-slug")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("released a bound IP %v; ip_address is owned by its own resource and must not be released", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteStopsOnIPDiscoveryError verifies a discovery error while
+// resolving the LB's IP fails the destroy instead of deleting the LB and orphaning the IP.
+func TestLoadBalancerResource_deleteStopsOnIPDiscoveryError(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: errors.New("api unavailable")}
+	ipSvc := &fakeLBIPService{}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the LB's IP cannot be resolved")
+	}
+	if len(svc.canceled) != 0 {
+		t.Errorf("LB must not be deleted when IP discovery fails, got canceled=%v", svc.canceled)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("no IP should be released on a discovery error, got %v", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteStopsWhenIPStrategyUnknown verifies that when the live LB
+// reports a public IP whose slug is not in the account IP list, destroy stops (inconclusive)
+// instead of silently skipping the release and orphaning a possibly-dedicated IP.
+func TestLoadBalancerResource_deleteStopsWhenIPStrategyUnknown(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-missing", IPAddress: "203.0.113.9"}},
+		},
+	}
+	// The IP list does not contain ip-missing, so its strategy cannot be confirmed.
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-other", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the LB's IP is not in the account list (strategy unconfirmed)")
+	}
+	if len(svc.canceled) != 0 {
+		t.Errorf("LB must not be deleted when its IP strategy is unconfirmed, got canceled=%v", svc.canceled)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("no IP should be released on an inconclusive result, got %v", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteErrorsWhenIPReleaseFails verifies a failed release of the
+// acquired IP fails the destroy (a billable leak must surface), not just warn. The LB is
+// already canceled by then; a not-found release is treated as success elsewhere.
+func TestLoadBalancerResource_deleteErrorsWhenIPReleaseFails(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{
+		ips:        []ipaddress.IPAddress{{Slug: "ip-1", Strategy: "STATIC"}},
+		releaseErr: errors.New("release refused"),
+	}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected a destroy error when the acquired IP cannot be released")
+	}
+	if len(svc.canceled) == 0 {
+		t.Error("the LB should have been canceled before the failed IP release")
+	}
+}
+
+// TestLoadBalancerResource_deleteRetriesCancelUntilGone verifies the destroy re-issues the
+// cancel while the LB is still present. The platform can wedge a cancellation that races
+// another teardown (a 200 that never removes the LB); a repeated cancel unsticks it.
+func TestLoadBalancerResource_deleteRetriesCancelUntilGone(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+		cancelUnsticksAfter: 2, // the first cancel wedges; the retry removes the LB
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", IPAddress: "203.0.113.9", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(svc.canceled) < 2 {
+		t.Errorf("cancel was issued %d time(s); expected a retry to unstick a wedged deletion", len(svc.canceled))
+	}
+	if len(ipSvc.released) != 1 || ipSvc.released[0] != "ip-1" {
+		t.Errorf("released = %v, want [ip-1] once the retried cancel removed the LB", ipSvc.released)
+	}
+}
+
 func TestLoadBalancerResource_createHappyPath(t *testing.T) {
 	svc := &fakeLoadBalancerService{
 		created: &loadbalancer.LoadBalancer{
@@ -311,8 +503,12 @@ func TestLoadBalancerResource_deleteHappyPath(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "web-lb-a1b2" {
-		t.Errorf("Delete called with %v, want [web-lb-a1b2]", svc.deleted)
+	if len(svc.canceled) != 1 || svc.canceled[0] != "web-lb-a1b2" {
+		t.Errorf("Cancel called with %v, want [web-lb-a1b2]", svc.canceled)
+	}
+	// billing_cycle "hourly" in state must map to the "hour" unit the cancel body expects.
+	if svc.canceledCycle != "hour" {
+		t.Errorf("Cancel billing cycle = %q, want %q", svc.canceledCycle, "hour")
 	}
 }
 

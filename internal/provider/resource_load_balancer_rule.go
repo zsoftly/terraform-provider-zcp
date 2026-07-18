@@ -121,7 +121,7 @@ func (r *loadBalancerRuleResource) Configure(_ context.Context, req resource.Con
 		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *ProviderData, got %T.", req.ProviderData))
 		return
 	}
-	r.svc = loadbalancer.NewService(pd.Client)
+	r.svc = &loadBalancerService{Service: loadbalancer.NewService(pd.Client), client: pd.Client}
 }
 
 // findLBBySlug scans the account-wide list for the given load balancer.
