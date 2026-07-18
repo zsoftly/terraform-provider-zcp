@@ -26,15 +26,12 @@ slug of a `zcp_network`), or let the platform auto-create one with
 auto-creates an isolated network Terraform does not track, so destroy leaves it
 behind. Set `assign_public_ip = false` for a private-only instance.
 
-**Destroy requests release of the auto-assigned public IP, but the platform does
-not honor it yet.** When `assign_public_ip` is `true` (the default), the
-platform allocates a public IP at create time. Destroy asks the API to release
-it. The live API ignores the request (the IP-release endpoint rejects token
-auth, a known platform bug with a fix in progress), so the IP stays allocated
-and billed. Release it manually with `zcp ip release <ip-slug>` after
-destroying. Destroy starts releasing the IP automatically once the platform fix
-lands. An IP attached via `zcp_ip_address`/`zcp_ip_association` belongs to those
-resources and is untouched.
+**Destroy releases the auto-assigned public IP.** When `assign_public_ip` is
+`true` (the default), the platform allocates a public IP at create time, and
+destroy releases it through the service-cancellation workflow so it is not left
+allocated and billed. A public IP attached via
+`zcp_ip_address`/`zcp_ip_association` belongs to those resources and is
+untouched. Set `assign_public_ip = false` to keep the IP allocated on destroy.
 
 **Power state is not managed by Terraform.** The provider reports the instance's
 runtime state (running/stopped) read-only in `state`. Running `apply` against a
@@ -136,8 +133,8 @@ the IPs come from the subsequent read.
   `zcp plan network` to list values. Changing this forces replacement.
 - `assign_public_ip` (Boolean) Whether to assign a public IP. Defaults to
   `true`. Set to `false` for a private-only instance. When `true`, destroy
-  requests release of the auto-assigned IP, though the platform does not honor
-  it yet (see the note above). Changing this forces replacement.
+  releases the auto-assigned IP (see the note above). Changing this forces
+  replacement.
 - `storage_category` (String) Storage category slug. Region-specific:
   `nvme`/`hdd-storage` in yow-1, `pro-nvme`/`premium-ssd` in yul-1. Required by
   the public API. Changing this forces replacement.

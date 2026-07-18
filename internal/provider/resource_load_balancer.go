@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/api/loadbalancer"
 )
 
@@ -34,8 +36,17 @@ type loadBalancerServiceIface interface {
 	DetachVM(ctx context.Context, lbSlug, ruleID, vmSlug string) error
 }
 
+// lbIPServiceIface releases a load balancer's own public IP on destroy. Only a
+// dedicated IP the LB acquired is released; a bound zcp_ip_address is left to its
+// own resource, and a network source-NAT IP is never released.
+type lbIPServiceIface interface {
+	List(ctx context.Context, vpcSlug, region, project string) ([]ipaddress.IPAddress, error)
+	Release(ctx context.Context, slug string) error
+}
+
 type loadBalancerResource struct {
 	svc            loadBalancerServiceIface
+	ipSvc          lbIPServiceIface
 	defaultProject string
 }
 
@@ -208,6 +219,7 @@ func (r *loadBalancerResource) Configure(_ context.Context, req resource.Configu
 		return
 	}
 	r.svc = loadbalancer.NewService(pd.Client)
+	r.ipSvc = ipaddress.NewService(pd.Client)
 	r.defaultProject = pd.DefaultProject
 }
 
@@ -414,14 +426,24 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 	defer cancel()
 
 	slug := model.ID.ValueString()
-	err := r.svc.Delete(deleteCtx, slug)
-	if err != nil && !apierrors.IsNotFound(err) {
+	region := model.Region.ValueString()
+	project := r.projectOrDefault(model.Project)
+
+	// When this LB acquired its own public IP (acquire_new_ip, i.e. no bound
+	// ip_address), the LB owns that IP, so destroy must release it or it is orphaned
+	// with no resource to clean it up. A bound zcp_ip_address is owned by that
+	// resource and left alone; a network source-NAT IP is owned by the network.
+	// Resolve the releasable IP before deleting the LB.
+	var releaseIPSlug string
+	if r.ipSvc != nil && (model.IPAddress.IsNull() || model.IPAddress.ValueString() == "") {
+		releaseIPSlug = r.releasableLBIP(deleteCtx, slug, region, project)
+	}
+
+	if err := r.svc.Delete(deleteCtx, slug); err != nil && !apierrors.IsNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete load balancer", err.Error())
 		return
 	}
 
-	region := model.Region.ValueString()
-	project := r.projectOrDefault(model.Project)
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
 		lbs, err := r.svc.List(ctx, region, project)
 		if apierrors.IsNotFound(err) {
@@ -438,7 +460,44 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 		return false, nil
 	}); err != nil {
 		resp.Diagnostics.AddError("Load balancer deletion did not complete", err.Error())
+		return
 	}
+
+	// The LB is gone, so its dedicated IP is detached. Release it best-effort: the LB
+	// is already deleted, so a failure here is a warning, not a destroy error.
+	if releaseIPSlug != "" {
+		if err := r.ipSvc.Release(deleteCtx, releaseIPSlug); err != nil &&
+			!apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
+			resp.Diagnostics.AddWarning(
+				"Load balancer public IP not released",
+				fmt.Sprintf("the load balancer was deleted but its public IP could not be released: %s. Release it manually with 'zcp ip release %s'.", err.Error(), releaseIPSlug),
+			)
+		}
+	}
+}
+
+// releasableLBIP returns the LB's public-IP slug when it is safe to release on
+// destroy: a dedicated IP the LB acquired. It returns "" for a network source-NAT
+// IP (owned by the network) or when the IP cannot be confirmed, so a source-NAT is
+// never released.
+func (r *loadBalancerResource) releasableLBIP(ctx context.Context, slug, region, project string) string {
+	lb := r.findLB(ctx, slug, region, project)
+	if lb == nil || lb.IPAddress == nil || lb.IPAddress.Slug == "" {
+		return ""
+	}
+	ips, err := r.ipSvc.List(ctx, "", region, project)
+	if err != nil {
+		return ""
+	}
+	for _, ip := range ips {
+		if ip.Slug == lb.IPAddress.Slug {
+			if strings.EqualFold(ip.Strategy, "SOURCE-NAT") {
+				return ""
+			}
+			return ip.Slug
+		}
+	}
+	return ""
 }
 
 // ImportState accepts a composite ID so the write-only create attributes are

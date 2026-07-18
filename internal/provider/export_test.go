@@ -214,6 +214,10 @@ func NewDNSRecordResourceWithService(svc dnsServiceIface, deleter dnsRecordDelet
 
 // NewLoadBalancerResourceWithService creates a loadBalancerResource pre-wired
 // with the given service; available only in test binaries.
+func NewLoadBalancerResourceWithServices(svc loadBalancerServiceIface, ipSvc lbIPServiceIface) resource.Resource {
+	return &loadBalancerResource{svc: svc, ipSvc: ipSvc}
+}
+
 func NewLoadBalancerResourceWithService(svc loadBalancerServiceIface) resource.Resource {
 	return &loadBalancerResource{svc: svc}
 }

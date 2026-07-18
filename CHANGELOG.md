@@ -1,8 +1,30 @@
 # Changelog
 
-This file documents all notable changes to the ZCP Terraform provider. The
-format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the
-project adheres to [Semantic Versioning](https://semver.org/).
+This file documents all notable changes to the ZCP provider for Terraform and
+OpenTofu. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
+to [Semantic Versioning](https://semver.org/).
+
+## [v0.1.1] - 2026-07-18
+
+### Changed
+
+- Upgraded the zcp-cli SDK from v0.0.23 to v0.0.24. Public IP and load balancer
+  listings now page through every result instead of stopping at the first page.
+
+### Fixed
+
+- `zcp_instance` destroy now releases the VM's auto-assigned public IP. It goes
+  through the service-cancellation workflow that the CMP Web UI runs, which
+  frees the IP as part of the deletion, so destroy no longer leaves a billable
+  address. A public IP bound through `zcp_ip_address`/`zcp_ip_association` is
+  left to its own resource. Set `assign_public_ip = false` to keep the IP.
+  Verified end to end with Terraform and OpenTofu.
+- `zcp_load_balancer` destroy now releases the public IP the load balancer
+  acquired (`acquire_new_ip = true`, the default), which was previously
+  orphaned. A network source-NAT IP is never released, since the network owns it
+  and releases it when the network is destroyed. A public IP bound through
+  `ip_address` is left to its own resource.
 
 ## [v0.1.0] - 2026-07-07
 

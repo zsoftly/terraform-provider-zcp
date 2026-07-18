@@ -11,10 +11,26 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/api/loadbalancer"
 
 	internalprovider "github.com/zsoftly/terraform-provider-zcp/internal/provider"
 )
+
+// fakeLBIPService satisfies lbIPServiceIface for the destroy IP-release path.
+type fakeLBIPService struct {
+	ips      []ipaddress.IPAddress
+	released []string
+}
+
+func (f *fakeLBIPService) List(_ context.Context, _, _, _ string) ([]ipaddress.IPAddress, error) {
+	return f.ips, nil
+}
+
+func (f *fakeLBIPService) Release(_ context.Context, slug string) error {
+	f.released = append(f.released, slug)
+	return nil
+}
 
 // fakeLoadBalancerService satisfies loadBalancerServiceIface.
 type fakeLoadBalancerService struct {
@@ -182,6 +198,84 @@ func deleteLB(t *testing.T, svc *fakeLoadBalancerService, id string) resource.De
 	var deleteResp resource.DeleteResponse
 	r.Delete(context.Background(), deleteReq, &deleteResp)
 	return deleteResp
+}
+
+// deleteLBIP runs Delete with both the LB and IP services. boundIP sets ip_address in
+// state (empty means the LB acquired its own IP).
+func deleteLBIP(t *testing.T, svc *fakeLoadBalancerService, ipSvc *fakeLBIPService, boundIP string) resource.DeleteResponse {
+	t.Helper()
+	r := internalprovider.NewLoadBalancerResourceWithServices(svc, ipSvc)
+	schResp := lbSchema(t)
+	stateVal := lbRaw(t, schResp, "web-lb-a1b2", "web-lb", "rule-1")
+	if boundIP != "" {
+		v := stateVal.Copy()
+		obj := map[string]tftypes.Value{}
+		_ = v.As(&obj)
+		obj["ip_address"] = tftypes.NewValue(tftypes.String, boundIP)
+		stateVal = tftypes.NewValue(v.Type(), obj)
+	}
+	deleteReq := resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	var deleteResp resource.DeleteResponse
+	r.Delete(context.Background(), deleteReq, &deleteResp)
+	return deleteResp
+}
+
+// TestLoadBalancerResource_deleteReleasesAcquiredIP verifies destroy releases the IP the LB
+// acquired itself (no bound ip_address) — otherwise it orphans a billable address.
+func TestLoadBalancerResource_deleteReleasesAcquiredIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+	}
+	// An attached LB IP reports an empty strategy; the gate is "not SOURCE-NAT".
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", IPAddress: "203.0.113.9", Strategy: ""}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(svc.deleted) != 1 {
+		t.Errorf("LB not deleted: %v", svc.deleted)
+	}
+	if len(ipSvc.released) != 1 || ipSvc.released[0] != "ip-1" {
+		t.Errorf("released = %v, want [ip-1] (the LB owned its acquired IP)", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteSkipsSourceNATIP verifies destroy never releases a network
+// source-NAT IP (the network owns it; releasing it would break the network).
+func TestLoadBalancerResource_deleteSkipsSourceNATIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-snat", IPAddress: "203.0.113.1"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-snat", Strategy: "SOURCE-NAT"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("released a SOURCE-NAT IP %v; the network owns it and it must never be released", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteKeepsBoundIP verifies destroy leaves a bound zcp_ip_address
+// alone — that IP is owned by its own resource.
+func TestLoadBalancerResource_deleteKeepsBoundIP(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "existing-ip-slug")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("released a bound IP %v; ip_address is owned by its own resource and must not be released", ipSvc.released)
+	}
 }
 
 func TestLoadBalancerResource_createHappyPath(t *testing.T) {

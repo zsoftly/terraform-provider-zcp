@@ -14,6 +14,11 @@ endpoint for load balancers, so every change forces replacement.
 By default the load balancer acquires a fresh public IP. Set `ip_address` to
 bind an existing public IP instead.
 
+When the load balancer acquired its own IP (`acquire_new_ip = true`), destroy
+releases that IP so it is not left billable. A network source-NAT IP is never
+released, since the network owns it. A public IP bound through `ip_address` is
+left to its own resource.
+
 ## Example Usage
 
 ```terraform
