@@ -15,8 +15,10 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
+	"github.com/zsoftly/zcp-cli/pkg/api/billing"
 	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 	"github.com/zsoftly/zcp-cli/pkg/api/loadbalancer"
+	"github.com/zsoftly/zcp-cli/pkg/httpclient"
 )
 
 var _ resource.Resource = &loadBalancerResource{}
@@ -25,15 +27,42 @@ var _ resource.ResourceWithImportState = &loadBalancerResource{}
 var _ resource.ResourceWithValidateConfig = &loadBalancerResource{}
 
 // loadBalancerServiceIface is shared by zcp_load_balancer, zcp_load_balancer_rule,
-// and zcp_load_balancer_attachment.
+// and zcp_load_balancer_attachment. Delete goes through Cancel (the
+// service-cancellation workflow), never the raw DELETE /load-balancers/{slug},
+// which returns success but does not reliably remove the LB.
 type loadBalancerServiceIface interface {
 	List(ctx context.Context, region, project string) ([]loadbalancer.LoadBalancer, error)
 	Create(ctx context.Context, req loadbalancer.CreateRequest) (*loadbalancer.LoadBalancer, error)
-	Delete(ctx context.Context, slug string) error
+	Cancel(ctx context.Context, slug, billingCycle string) error
 	CreateRule(ctx context.Context, lbSlug string, req loadbalancer.CreateRuleRequest) error
 	DeleteRule(ctx context.Context, lbSlug, ruleID string) error
 	AttachVM(ctx context.Context, lbSlug, ruleID string, req loadbalancer.AttachVMRequest) error
 	DetachVM(ctx context.Context, lbSlug, ruleID, vmSlug string) error
+}
+
+// loadBalancerService adapts the zcp-cli loadbalancer.Service so destroy deletes the
+// load balancer through the service-cancellation workflow. The raw
+// DELETE /load-balancers/{slug} the SDK exposes returns success but can leave the LB
+// stuck "deleting" indefinitely; the Web UI and CLI cancel the billing service, which
+// is the path that actually tears it down.
+type loadBalancerService struct {
+	*loadbalancer.Service
+	client *httpclient.Client
+}
+
+// Cancel deletes the load balancer through the unified service-cancellation workflow
+// (POST /billing/service-cancel-requests/{slug}). The LB's public IP is a separate
+// reusable resource, so no delete_public_ip is sent; the resource releases a dedicated
+// IP itself after the LB is gone.
+func (s *loadBalancerService) Cancel(ctx context.Context, slug, billingCycle string) error {
+	req := billing.CancelServiceRequest{
+		ServiceName:  "Load Balancer",
+		Reason:       "not_needed_anymore",
+		Type:         "Immediate",
+		Status:       "Pending",
+		BillingCycle: billingCycle,
+	}
+	return billing.NewService(s.client).CancelService(ctx, slug, req)
 }
 
 // lbIPServiceIface releases a load balancer's own public IP on destroy. Only a
@@ -48,6 +77,9 @@ type loadBalancerResource struct {
 	svc            loadBalancerServiceIface
 	ipSvc          lbIPServiceIface
 	defaultProject string
+	// deletePollInterval overrides the destroy poll interval; 0 uses the default.
+	// Tests set it small so the cancel-retry path runs without real delays.
+	deletePollInterval time.Duration
 }
 
 type loadBalancerResourceModel struct {
@@ -218,7 +250,7 @@ func (r *loadBalancerResource) Configure(_ context.Context, req resource.Configu
 		resp.Diagnostics.AddError("Unexpected provider data type", fmt.Sprintf("Expected *ProviderData, got %T.", req.ProviderData))
 		return
 	}
-	r.svc = loadbalancer.NewService(pd.Client)
+	r.svc = &loadBalancerService{Service: loadbalancer.NewService(pd.Client), client: pd.Client}
 	r.ipSvc = ipaddress.NewService(pd.Client)
 	r.defaultProject = pd.DefaultProject
 }
@@ -436,15 +468,32 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 	// Resolve the releasable IP before deleting the LB.
 	var releaseIPSlug string
 	if r.ipSvc != nil && (model.IPAddress.IsNull() || model.IPAddress.ValueString() == "") {
-		releaseIPSlug = r.releasableLBIP(deleteCtx, slug, region, project)
+		s, err := r.releasableLBIP(deleteCtx, slug, region, project)
+		if err != nil {
+			// Could not determine whether the IP is safe to release. Stop rather than
+			// delete the LB and orphan the IP; the user can retry the destroy.
+			resp.Diagnostics.AddError("Failed to resolve load balancer public IP", err.Error())
+			return
+		}
+		releaseIPSlug = s
 	}
 
-	if err := r.svc.Delete(deleteCtx, slug); err != nil && !apierrors.IsNotFound(err) {
+	billingCycle := cancelBillingCycleUnit(model.BillingCycle.ValueString())
+	if err := r.svc.Cancel(deleteCtx, slug, billingCycle); err != nil &&
+		!apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete load balancer", err.Error())
 		return
 	}
 
-	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
+	pollInterval := r.deletePollInterval
+	if pollInterval <= 0 {
+		pollInterval = 10 * time.Second
+	}
+	// Poll until the LB is gone, re-issuing the cancel whenever it is still present.
+	// The platform can wedge a cancellation that races another service teardown in the
+	// same apply (e.g. a VM destroyed together with the LB): it returns 200 but never
+	// removes the LB. A repeated cancel unsticks it, so the poll keeps requesting it.
+	if err := pollUntilGone(deleteCtx, pollInterval, func(ctx context.Context) (bool, error) {
 		lbs, err := r.svc.List(ctx, region, project)
 		if apierrors.IsNotFound(err) {
 			return false, nil
@@ -454,6 +503,10 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 		}
 		for i := range lbs {
 			if lbs[i].Slug == slug {
+				if cerr := r.svc.Cancel(ctx, slug, billingCycle); cerr != nil &&
+					!apierrors.IsNotFound(cerr) && !apierrors.IsResourceNotFound(cerr) {
+					return false, cerr
+				}
 				return true, nil
 			}
 		}
@@ -477,27 +530,38 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 }
 
 // releasableLBIP returns the LB's public-IP slug when it is safe to release on
-// destroy: a dedicated IP the LB acquired. It returns "" for a network source-NAT
-// IP (owned by the network) or when the IP cannot be confirmed, so a source-NAT is
-// never released.
-func (r *loadBalancerResource) releasableLBIP(ctx context.Context, slug, region, project string) string {
-	lb := r.findLB(ctx, slug, region, project)
+// destroy: a dedicated IP the LB acquired. It returns "" (with no error) for a
+// network source-NAT IP (owned by the network) or an absent IP, so a source-NAT is
+// never released. A discovery error (LB list or IP list) is returned to the caller
+// rather than swallowed into "", so destroy stops instead of orphaning the IP.
+func (r *loadBalancerResource) releasableLBIP(ctx context.Context, slug, region, project string) (string, error) {
+	lbs, err := r.svc.List(ctx, region, project)
+	if err != nil {
+		return "", fmt.Errorf("listing load balancers to resolve %s's IP: %w", slug, err)
+	}
+	var lb *loadbalancer.LoadBalancer
+	for i := range lbs {
+		if lbs[i].Slug == slug {
+			lb = &lbs[i]
+			break
+		}
+	}
 	if lb == nil || lb.IPAddress == nil || lb.IPAddress.Slug == "" {
-		return ""
+		return "", nil
 	}
 	ips, err := r.ipSvc.List(ctx, "", region, project)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("looking up IP strategy for %s: %w", slug, err)
 	}
 	for _, ip := range ips {
 		if ip.Slug == lb.IPAddress.Slug {
 			if strings.EqualFold(ip.Strategy, "SOURCE-NAT") {
-				return ""
+				return "", nil
 			}
-			return ip.Slug
+			return ip.Slug, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 // ImportState accepts a composite ID so the write-only create attributes are

@@ -18,13 +18,20 @@ to [Semantic Versioning](https://semver.org/).
   through the service-cancellation workflow that the CMP Web UI runs, which
   frees the IP as part of the deletion, so destroy no longer leaves a billable
   address. A public IP bound through `zcp_ip_address`/`zcp_ip_association` is
-  left to its own resource. Set `assign_public_ip = false` to keep the IP.
-  Verified end to end with Terraform and OpenTofu.
-- `zcp_load_balancer` destroy now releases the public IP the load balancer
-  acquired (`acquire_new_ip = true`, the default), which was previously
-  orphaned. A network source-NAT IP is never released, since the network owns it
-  and releases it when the network is destroyed. A public IP bound through
-  `ip_address` is left to its own resource.
+  left to its own resource. Set `assign_public_ip = false` to create the
+  instance without an auto-assigned public IP. Verified end to end with
+  Terraform and OpenTofu.
+- `zcp_load_balancer` destroy now deletes the load balancer through the
+  service-cancellation workflow the CMP Web UI runs, instead of the direct
+  delete endpoint, which could return success without removing the balancer.
+  Destroy waits for the balancer to be gone and re-issues the cancellation if
+  the platform stalls it, which it can do when the balancer's cancellation runs
+  at the same time as another service's teardown. Destroy then releases the
+  public IP the balancer acquired (`acquire_new_ip = true`, the default), which
+  was previously orphaned. The release is best-effort: a warning is issued if it
+  does not complete. A network source-NAT IP is never released, since the
+  network owns it and frees it when the network is destroyed. A public IP bound
+  through `ip_address` is left to its own resource.
 
 ## [v0.1.0] - 2026-07-07
 

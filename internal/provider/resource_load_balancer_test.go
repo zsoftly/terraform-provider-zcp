@@ -34,17 +34,22 @@ func (f *fakeLBIPService) Release(_ context.Context, slug string) error {
 
 // fakeLoadBalancerService satisfies loadBalancerServiceIface.
 type fakeLoadBalancerService struct {
-	lbs         []loadbalancer.LoadBalancer
-	created     *loadbalancer.LoadBalancer
-	createReq   loadbalancer.CreateRequest
-	err         error
-	deleted     []string
-	ruleReqs    []loadbalancer.CreateRuleRequest
-	rulesGone   []string
-	attachReqs  []loadbalancer.AttachVMRequest
-	detachedVMs []string
-	listRegion  string
-	listProject string
+	lbs           []loadbalancer.LoadBalancer
+	created       *loadbalancer.LoadBalancer
+	createReq     loadbalancer.CreateRequest
+	err           error
+	canceled      []string
+	canceledCycle string
+	// cancelUnsticksAfter models the platform wedge: the LB is removed (and later
+	// List calls report it gone) only once this many cancels have been issued. 0 or 1
+	// means the first cancel removes it.
+	cancelUnsticksAfter int
+	ruleReqs            []loadbalancer.CreateRuleRequest
+	rulesGone           []string
+	attachReqs          []loadbalancer.AttachVMRequest
+	detachedVMs         []string
+	listRegion          string
+	listProject         string
 }
 
 func (f *fakeLoadBalancerService) List(_ context.Context, region, project string) ([]loadbalancer.LoadBalancer, error) {
@@ -56,12 +61,16 @@ func (f *fakeLoadBalancerService) Create(_ context.Context, req loadbalancer.Cre
 	f.createReq = req
 	return f.created, f.err
 }
-func (f *fakeLoadBalancerService) Delete(_ context.Context, slug string) error {
-	f.deleted = append(f.deleted, slug)
-	if f.err == nil {
+func (f *fakeLoadBalancerService) Cancel(_ context.Context, slug, billingCycle string) error {
+	f.canceled = append(f.canceled, slug)
+	f.canceledCycle = billingCycle
+	if f.err != nil {
+		return f.err
+	}
+	if len(f.canceled) >= f.cancelUnsticksAfter {
 		f.lbs = nil // gone on the next List so pollUntilGone finishes
 	}
-	return f.err
+	return nil
 }
 func (f *fakeLoadBalancerService) CreateRule(_ context.Context, _ string, req loadbalancer.CreateRuleRequest) error {
 	f.ruleReqs = append(f.ruleReqs, req)
@@ -234,8 +243,8 @@ func TestLoadBalancerResource_deleteReleasesAcquiredIP(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if len(svc.deleted) != 1 {
-		t.Errorf("LB not deleted: %v", svc.deleted)
+	if len(svc.canceled) != 1 {
+		t.Errorf("LB not canceled (deleted): %v", svc.canceled)
 	}
 	if len(ipSvc.released) != 1 || ipSvc.released[0] != "ip-1" {
 		t.Errorf("released = %v, want [ip-1] (the LB owned its acquired IP)", ipSvc.released)
@@ -275,6 +284,46 @@ func TestLoadBalancerResource_deleteKeepsBoundIP(t *testing.T) {
 	}
 	if len(ipSvc.released) != 0 {
 		t.Errorf("released a bound IP %v; ip_address is owned by its own resource and must not be released", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteStopsOnIPDiscoveryError verifies a discovery error while
+// resolving the LB's IP fails the destroy instead of deleting the LB and orphaning the IP.
+func TestLoadBalancerResource_deleteStopsOnIPDiscoveryError(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: errors.New("api unavailable")}
+	ipSvc := &fakeLBIPService{}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the LB's IP cannot be resolved")
+	}
+	if len(svc.canceled) != 0 {
+		t.Errorf("LB must not be deleted when IP discovery fails, got canceled=%v", svc.canceled)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("no IP should be released on a discovery error, got %v", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteRetriesCancelUntilGone verifies the destroy re-issues the
+// cancel while the LB is still present. The platform can wedge a cancellation that races
+// another teardown (a 200 that never removes the LB); a repeated cancel unsticks it.
+func TestLoadBalancerResource_deleteRetriesCancelUntilGone(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+		cancelUnsticksAfter: 2, // the first cancel wedges; the retry removes the LB
+	}
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-1", IPAddress: "203.0.113.9", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if len(svc.canceled) < 2 {
+		t.Errorf("cancel was issued %d time(s); expected a retry to unstick a wedged deletion", len(svc.canceled))
+	}
+	if len(ipSvc.released) != 1 || ipSvc.released[0] != "ip-1" {
+		t.Errorf("released = %v, want [ip-1] once the retried cancel removed the LB", ipSvc.released)
 	}
 }
 
@@ -405,8 +454,12 @@ func TestLoadBalancerResource_deleteHappyPath(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("unexpected error: %v", resp.Diagnostics)
 	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "web-lb-a1b2" {
-		t.Errorf("Delete called with %v, want [web-lb-a1b2]", svc.deleted)
+	if len(svc.canceled) != 1 || svc.canceled[0] != "web-lb-a1b2" {
+		t.Errorf("Cancel called with %v, want [web-lb-a1b2]", svc.canceled)
+	}
+	// billing_cycle "hourly" in state must map to the "hour" unit the cancel body expects.
+	if svc.canceledCycle != "hour" {
+		t.Errorf("Cancel billing cycle = %q, want %q", svc.canceledCycle, "hour")
 	}
 }
 

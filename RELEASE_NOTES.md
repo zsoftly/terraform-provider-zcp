@@ -3,14 +3,21 @@
 ## v0.1.1 (2026-07-18)
 
 A bug-fix release. Destroying a resource now releases the public IP it created,
-so nothing billable is left behind.
+instead of leaving it allocated.
 
 - `zcp_instance` destroy releases the VM's auto-assigned public IP through the
-  service-cancellation workflow. Set `assign_public_ip = false` to keep it.
-- `zcp_load_balancer` destroy releases the public IP the load balancer acquired
-  (`acquire_new_ip = true`, the default). A network source-NAT IP is never
-  released, since the network owns it, and a bound `ip_address` is left to its
-  own resource.
+  service-cancellation workflow. Set `assign_public_ip = false` to create the
+  instance without an auto-assigned public IP.
+- `zcp_load_balancer` destroy deletes the load balancer through the
+  service-cancellation workflow instead of the direct delete endpoint, which
+  could report success without removing it. Destroy waits for the balancer to be
+  gone and re-issues the cancellation if the platform stalls it (which it can do
+  when the balancer's cancellation runs at the same time as another service's
+  teardown). It then releases the public IP the balancer acquired
+  (`acquire_new_ip = true`, the default) on a best-effort basis, with a warning
+  if the release does not complete. A network source-NAT IP is never released,
+  since the network owns it, and a bound `ip_address` is left to its own
+  resource.
 
 Built on the zcp-cli SDK v0.0.24. Verified end to end with Terraform and
 OpenTofu.

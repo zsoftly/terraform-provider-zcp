@@ -31,7 +31,8 @@ behind. Set `assign_public_ip = false` for a private-only instance.
 destroy releases it through the service-cancellation workflow so it is not left
 allocated and billed. A public IP attached via
 `zcp_ip_address`/`zcp_ip_association` belongs to those resources and is
-untouched. Set `assign_public_ip = false` to keep the IP allocated on destroy.
+untouched. Set `assign_public_ip = false` to create the instance without an
+auto-assigned public IP.
 
 **Power state is not managed by Terraform.** The provider reports the instance's
 runtime state (running/stopped) read-only in `state`. Running `apply` against a

@@ -14,10 +14,13 @@ endpoint for load balancers, so every change forces replacement.
 By default the load balancer acquires a fresh public IP. Set `ip_address` to
 bind an existing public IP instead.
 
-When the load balancer acquired its own IP (`acquire_new_ip = true`), destroy
-releases that IP so it is not left billable. A network source-NAT IP is never
-released, since the network owns it. A public IP bound through `ip_address` is
-left to its own resource.
+Destroy deletes the load balancer through the service-cancellation workflow and
+waits for it to be gone, re-issuing the cancellation if the platform stalls it
+(which it can do when the balancer's cancellation runs at the same time as
+another service's teardown). When the load balancer acquired its own IP
+(`acquire_new_ip = true`), destroy then releases that IP so it is not left
+billable. A network source-NAT IP is never released, since the network owns it.
+A public IP bound through `ip_address` is left to its own resource.
 
 ## Example Usage
 

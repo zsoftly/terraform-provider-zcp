@@ -420,7 +420,11 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
 	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
-		r.cleanupAfterFailedCreate(ctx, slug, isPublic, cancelBillingCycleUnit(model.BillingCycle.ValueString()), &resp.Diagnostics)
+		// waitForRunning may have failed because the create-timeout context expired, so
+		// run the cleanup on a fresh bounded context that can still cancel the instance.
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		r.cleanupAfterFailedCreate(cleanupCtx, slug, isPublic, cancelBillingCycleUnit(model.BillingCycle.ValueString()), &resp.Diagnostics)
+		cleanupCancel()
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
