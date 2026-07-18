@@ -1,5 +1,14 @@
 # terraform-provider-zcp
 
+[![Terraform Registry](https://img.shields.io/badge/Terraform%20Registry-zsoftly%2Fzcp-7B42BC?logo=terraform&logoColor=white)](https://registry.terraform.io/providers/zsoftly/zcp/latest)
+[![OpenTofu Registry](https://img.shields.io/badge/OpenTofu%20Registry-zsoftly%2Fzcp-FFDA18?logo=opentofu&logoColor=black)](https://search.opentofu.org/provider/zsoftly/zcp/latest)
+
+[![Release](https://img.shields.io/github/v/release/zsoftly/terraform-provider-zcp?logo=github&label=release&color=2ea44f)](https://github.com/zsoftly/terraform-provider-zcp/releases/latest)
+[![CI](https://github.com/zsoftly/terraform-provider-zcp/actions/workflows/ci.yml/badge.svg)](https://github.com/zsoftly/terraform-provider-zcp/actions/workflows/ci.yml)
+
+[![License: MIT](https://img.shields.io/github/license/zsoftly/terraform-provider-zcp?color=blue)](LICENSE)
+[![Go version](https://img.shields.io/github/go-mod/go-version/zsoftly/terraform-provider-zcp?logo=go&logoColor=white)](go.mod)
+
 Terraform and OpenTofu provider for the ZSoftly Cloud Platform (ZCP). It manages
 compute, networking, Kubernetes, DNS, object storage, VPN, and account
 governance through the ZCP API, using the same SDK as the
