@@ -14,10 +14,10 @@ instead of leaving it allocated.
   gone and re-issues the cancellation if the platform stalls it (which it can do
   when the balancer's cancellation runs at the same time as another service's
   teardown). It then releases the public IP the balancer acquired
-  (`acquire_new_ip = true`, the default) on a best-effort basis, with a warning
-  if the release does not complete. A network source-NAT IP is never released,
-  since the network owns it, and a bound `ip_address` is left to its own
-  resource.
+  (`acquire_new_ip = true`, the default); if that release fails, destroy fails
+  with an error naming the IP instead of leaving it allocated. A network
+  source-NAT IP is never released, since the network owns it, and a bound
+  `ip_address` is left to its own resource.
 
 Built on the zcp-cli SDK v0.0.24. Verified end to end with Terraform and
 OpenTofu.

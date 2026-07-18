@@ -516,15 +516,18 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 
-	// The LB is gone, so its dedicated IP is detached. Release it best-effort: the LB
-	// is already deleted, so a failure here is a warning, not a destroy error.
+	// The LB is gone, so its dedicated IP is detached; release it. A failure here is a
+	// destroy error, not a warning: the IP is still allocated and billable, and a hard
+	// (non-zero exit) error surfaces the leak in automation where a warning is missed.
+	// An already-released IP (not found) is treated as success, so it never blocks.
 	if releaseIPSlug != "" {
 		if err := r.ipSvc.Release(deleteCtx, releaseIPSlug); err != nil &&
 			!apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
-			resp.Diagnostics.AddWarning(
+			resp.Diagnostics.AddError(
 				"Load balancer public IP not released",
-				fmt.Sprintf("the load balancer was deleted but its public IP could not be released: %s. Release it manually with 'zcp ip release %s'.", err.Error(), releaseIPSlug),
+				fmt.Sprintf("the load balancer was deleted, but its public IP could not be released: %s. Release it manually with 'zcp ip release %s', then re-run destroy to clear the resource from state.", err.Error(), releaseIPSlug),
 			)
+			return
 		}
 	}
 }
@@ -561,7 +564,11 @@ func (r *loadBalancerResource) releasableLBIP(ctx context.Context, slug, region,
 			return ip.Slug, nil
 		}
 	}
-	return "", nil
+	// The live LB reports public IP lb.IPAddress.Slug, but it is not in the account IP
+	// list, so its strategy cannot be confirmed. Treat this as inconclusive rather than
+	// "no IP to release": returning "" would silently skip a dedicated IP the listing
+	// merely missed and orphan it. Stop so a retried destroy can resolve it.
+	return "", fmt.Errorf("load balancer %s references public IP %s, which is not in the account IP list; cannot confirm it is safe to release", slug, lb.IPAddress.Slug)
 }
 
 // ImportState accepts a composite ID so the write-only create attributes are

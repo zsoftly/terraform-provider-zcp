@@ -19,8 +19,9 @@ import (
 
 // fakeLBIPService satisfies lbIPServiceIface for the destroy IP-release path.
 type fakeLBIPService struct {
-	ips      []ipaddress.IPAddress
-	released []string
+	ips        []ipaddress.IPAddress
+	released   []string
+	releaseErr error
 }
 
 func (f *fakeLBIPService) List(_ context.Context, _, _, _ string) ([]ipaddress.IPAddress, error) {
@@ -28,6 +29,9 @@ func (f *fakeLBIPService) List(_ context.Context, _, _, _ string) ([]ipaddress.I
 }
 
 func (f *fakeLBIPService) Release(_ context.Context, slug string) error {
+	if f.releaseErr != nil {
+		return f.releaseErr
+	}
 	f.released = append(f.released, slug)
 	return nil
 }
@@ -301,6 +305,51 @@ func TestLoadBalancerResource_deleteStopsOnIPDiscoveryError(t *testing.T) {
 	}
 	if len(ipSvc.released) != 0 {
 		t.Errorf("no IP should be released on a discovery error, got %v", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteStopsWhenIPStrategyUnknown verifies that when the live LB
+// reports a public IP whose slug is not in the account IP list, destroy stops (inconclusive)
+// instead of silently skipping the release and orphaning a possibly-dedicated IP.
+func TestLoadBalancerResource_deleteStopsWhenIPStrategyUnknown(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-missing", IPAddress: "203.0.113.9"}},
+		},
+	}
+	// The IP list does not contain ip-missing, so its strategy cannot be confirmed.
+	ipSvc := &fakeLBIPService{ips: []ipaddress.IPAddress{{Slug: "ip-other", Strategy: "STATIC"}}}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the LB's IP is not in the account list (strategy unconfirmed)")
+	}
+	if len(svc.canceled) != 0 {
+		t.Errorf("LB must not be deleted when its IP strategy is unconfirmed, got canceled=%v", svc.canceled)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("no IP should be released on an inconclusive result, got %v", ipSvc.released)
+	}
+}
+
+// TestLoadBalancerResource_deleteErrorsWhenIPReleaseFails verifies a failed release of the
+// acquired IP fails the destroy (a billable leak must surface), not just warn. The LB is
+// already canceled by then; a not-found release is treated as success elsewhere.
+func TestLoadBalancerResource_deleteErrorsWhenIPReleaseFails(t *testing.T) {
+	svc := &fakeLoadBalancerService{
+		lbs: []loadbalancer.LoadBalancer{
+			{Slug: "web-lb-a1b2", IPAddress: &loadbalancer.IPAddress{Slug: "ip-1", IPAddress: "203.0.113.9"}},
+		},
+	}
+	ipSvc := &fakeLBIPService{
+		ips:        []ipaddress.IPAddress{{Slug: "ip-1", Strategy: "STATIC"}},
+		releaseErr: errors.New("release refused"),
+	}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected a destroy error when the acquired IP cannot be released")
+	}
+	if len(svc.canceled) == 0 {
+		t.Error("the LB should have been canceled before the failed IP release")
 	}
 }
 

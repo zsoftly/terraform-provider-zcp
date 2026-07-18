@@ -28,10 +28,11 @@ to [Semantic Versioning](https://semver.org/).
   the platform stalls it, which it can do when the balancer's cancellation runs
   at the same time as another service's teardown. Destroy then releases the
   public IP the balancer acquired (`acquire_new_ip = true`, the default), which
-  was previously orphaned. The release is best-effort: a warning is issued if it
-  does not complete. A network source-NAT IP is never released, since the
-  network owns it and frees it when the network is destroyed. A public IP bound
-  through `ip_address` is left to its own resource.
+  was previously orphaned. If that release fails, destroy now fails with an
+  error naming the IP instead of leaving it allocated silently; an
+  already-released IP is treated as success. A network source-NAT IP is never
+  released, since the network owns it and frees it when the network is
+  destroyed. A public IP bound through `ip_address` is left to its own resource.
 
 ## [v0.1.0] - 2026-07-07
 
