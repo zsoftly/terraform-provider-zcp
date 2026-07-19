@@ -201,9 +201,20 @@ func (r *dnsRecordResource) Create(ctx context.Context, req resource.CreateReque
 		Content: model.Content.ValueString(),
 		TTL:     int(model.TTL.ValueInt64()),
 	}
-	// MX records send priority in a separate field the backend requires. Other
-	// types must omit it. ValidateConfig has already enforced this.
+	// Priority belongs only on MX records. ValidateConfig catches misuse at plan
+	// time, but it skips values that were unknown then (e.g. a computed type), so
+	// re-check the resolved values here: send priority only for MX, and reject a
+	// non-MX record that still carries one. Unknown priority is left alone until
+	// it resolves.
 	if !model.Priority.IsNull() && !model.Priority.IsUnknown() {
+		if !strings.EqualFold(recType, "MX") {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("priority"),
+				"priority is only valid for MX records",
+				fmt.Sprintf("`priority` was set on a %q record. Remove it, or change `type` to MX.", recType),
+			)
+			return
+		}
 		p := int(model.Priority.ValueInt64())
 		createReq.Priority = &p
 	}

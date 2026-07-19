@@ -69,7 +69,9 @@ terraform import zcp_dns_record.www example-com/A/www
 - `type` (String) Record type: `A`, `AAAA`, `CNAME`, `MX`, `TXT`, or `NS`.
   Changing this forces replacement.
 - `content` (String) Record content (e.g. an IPv4 address for `A`, or the mail
-  server for `MX`). Write-only. Changing this forces replacement.
+  server for `MX`). Write-only: the API does not return content in a comparable
+  form, so out-of-band content changes are not detected. Changing this forces
+  replacement.
 - `ttl` (Number) Time to live in seconds (e.g. `3600`). Changing this forces
   replacement.
 

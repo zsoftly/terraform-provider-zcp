@@ -545,3 +545,23 @@ func TestDNSRecordResource_createMXSendsPriority(t *testing.T) {
 		t.Errorf("Priority = %d, want 10", *svc.lastRecordReq.Priority)
 	}
 }
+
+// A non-MX record with a resolved priority must be rejected at apply time, even
+// when ValidateConfig skipped it because the type was unknown at plan time.
+func TestDNSRecordResource_createRejectsPriorityOnNonMX(t *testing.T) {
+	svc := &fakeDNSService{recordResp: &dns.Domain{Slug: "example-com"}}
+	r := internalprovider.NewDNSRecordResourceWithService(svc, &fakeDNSRecordDeleter{})
+	schResp := dnsRecordSchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	prio := int64(10)
+	plan := dnsRecordConfigRaw(t, schResp, "example-com", "www", "A", "192.0.2.10", 3600, &prio)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: plan}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected a diagnostic for priority on a non-MX record, got none")
+	}
+	if svc.lastRecordReq.Priority != nil {
+		t.Error("priority must not be sent for a non-MX record")
+	}
+}
