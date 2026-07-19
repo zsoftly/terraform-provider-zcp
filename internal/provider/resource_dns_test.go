@@ -26,6 +26,7 @@ type fakeDNSService struct {
 	showErr        error
 	deletedDomains []string
 	deletedRecords []int
+	lastRecordReq  dns.CreateRecordRequest
 }
 
 func (f *fakeDNSService) Show(_ context.Context, _ string) (*dns.Domain, error) {
@@ -47,7 +48,8 @@ func (f *fakeDNSService) Delete(_ context.Context, slug string) error {
 	}
 	return f.err
 }
-func (f *fakeDNSService) CreateRecord(_ context.Context, _ string, _ dns.CreateRecordRequest) (*dns.Domain, error) {
+func (f *fakeDNSService) CreateRecord(_ context.Context, _ string, req dns.CreateRecordRequest) (*dns.Domain, error) {
+	f.lastRecordReq = req
 	return f.recordResp, f.err
 }
 func (f *fakeDNSService) DeleteRecord(_ context.Context, _ string, recordID int) error {
@@ -274,6 +276,7 @@ type dnsRecordStateModel struct {
 	Type     types.String   `tfsdk:"type"`
 	Content  types.String   `tfsdk:"content"`
 	TTL      types.Int64    `tfsdk:"ttl"`
+	Priority types.Int64    `tfsdk:"priority"`
 	FQDN     types.String   `tfsdk:"fqdn"`
 	Timeouts timeouts.Value `tfsdk:"timeouts"`
 }
@@ -302,7 +305,36 @@ func dnsRecordRaw(t *testing.T, schResp resource.SchemaResponse, id, domain, nam
 		"type":     str(recType),
 		"content":  str(content),
 		"ttl":      tftypes.NewValue(tftypes.Number, ttl),
+		"priority": tftypes.NewValue(tftypes.Number, nil),
 		"fqdn":     str(fqdn),
+		"timeouts": timeoutsNull(t, schResp),
+	})
+}
+
+// dnsRecordConfigRaw builds a config value with an explicit priority (nil = the
+// attribute is unset). Used to drive ValidateConfig and priority-aware Create.
+func dnsRecordConfigRaw(t *testing.T, schResp resource.SchemaResponse, domain, name, recType, content string, ttl int64, priority *int64) tftypes.Value {
+	t.Helper()
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	str := func(v string) tftypes.Value {
+		if v == "" {
+			return tftypes.NewValue(tftypes.String, nil)
+		}
+		return tftypes.NewValue(tftypes.String, v)
+	}
+	prioVal := tftypes.NewValue(tftypes.Number, nil)
+	if priority != nil {
+		prioVal = tftypes.NewValue(tftypes.Number, *priority)
+	}
+	return tftypes.NewValue(tfType, map[string]tftypes.Value{
+		"id":       tftypes.NewValue(tftypes.String, nil),
+		"domain":   str(domain),
+		"name":     str(name),
+		"type":     str(recType),
+		"content":  str(content),
+		"ttl":      tftypes.NewValue(tftypes.Number, ttl),
+		"priority": prioVal,
+		"fqdn":     tftypes.NewValue(tftypes.String, nil),
 		"timeouts": timeoutsNull(t, schResp),
 	})
 }
@@ -441,5 +473,95 @@ func TestDNSRecordResource_deleteByNameAndType(t *testing.T) {
 	}
 	if len(deleter.deleted) != 1 || deleter.deleted[0] != "A/www.example.com." {
 		t.Errorf("DeleteRecordByName called with %v, want [A/www.example.com.]", deleter.deleted)
+	}
+}
+
+func validateDNSRecordConfig(t *testing.T, recType, content string, ttl int64, priority *int64) resource.ValidateConfigResponse {
+	t.Helper()
+	r, ok := internalprovider.NewDNSRecordResource().(resource.ResourceWithValidateConfig)
+	if !ok {
+		t.Fatal("dns record resource does not implement ValidateConfig")
+	}
+	schResp := dnsRecordSchema(t)
+	cfg := dnsRecordConfigRaw(t, schResp, "example-com", "@", recType, content, ttl, priority)
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfg}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	return resp
+}
+
+func TestDNSRecordResource_validateConfigPriority(t *testing.T) {
+	p := func(v int64) *int64 { return &v }
+	cases := []struct {
+		name     string
+		recType  string
+		priority *int64
+		wantErr  bool
+	}{
+		{"MX without priority errors", "MX", nil, true},
+		{"MX with priority ok", "MX", p(10), false},
+		{"MX priority zero ok", "MX", p(0), false},
+		{"MX priority above range errors", "MX", p(70000), true},
+		{"MX priority below range errors", "MX", p(-1), true},
+		{"A with priority errors", "A", p(10), true},
+		{"A without priority ok", "A", nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := validateDNSRecordConfig(t, tc.recType, "mail.example.com.", 3600, tc.priority)
+			if resp.Diagnostics.HasError() != tc.wantErr {
+				t.Fatalf("HasError = %v, want %v (diags: %v)", resp.Diagnostics.HasError(), tc.wantErr, resp.Diagnostics)
+			}
+		})
+	}
+}
+
+func TestDNSRecordResource_createMXSendsPriority(t *testing.T) {
+	svc := &fakeDNSService{
+		recordResp: &dns.Domain{Slug: "example-com"},
+		domain: &dns.Domain{
+			Slug: "example-com",
+			Name: "example.com",
+			Records: []dns.Record{
+				{Name: "example.com.", Type: "MX", TTL: 3600},
+			},
+		},
+	}
+	r := internalprovider.NewDNSRecordResourceWithService(svc, &fakeDNSRecordDeleter{})
+	schResp := dnsRecordSchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	prio := int64(10)
+	plan := dnsRecordConfigRaw(t, schResp, "example-com", "@", "MX", "mail.example.com.", 3600, &prio)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: plan}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.lastRecordReq.Priority == nil {
+		t.Fatal("Priority was not sent to CreateRecord")
+	}
+	if *svc.lastRecordReq.Priority != 10 {
+		t.Errorf("Priority = %d, want 10", *svc.lastRecordReq.Priority)
+	}
+}
+
+// A non-MX record with a resolved priority must be rejected at apply time, even
+// when ValidateConfig skipped it because the type was unknown at plan time.
+func TestDNSRecordResource_createRejectsPriorityOnNonMX(t *testing.T) {
+	svc := &fakeDNSService{recordResp: &dns.Domain{Slug: "example-com"}}
+	r := internalprovider.NewDNSRecordResourceWithService(svc, &fakeDNSRecordDeleter{})
+	schResp := dnsRecordSchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	prio := int64(10)
+	plan := dnsRecordConfigRaw(t, schResp, "example-com", "www", "A", "192.0.2.10", 3600, &prio)
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: plan}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected a diagnostic for priority on a non-MX record, got none")
+	}
+	if svc.lastRecordReq.Priority != nil {
+		t.Error("priority must not be sent for a non-MX record")
 	}
 }

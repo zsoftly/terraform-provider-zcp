@@ -5,6 +5,24 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [v0.1.2] - 2026-07-18
+
+### Added
+
+- `zcp_dns_record` now supports `MX` records through a new `priority` argument
+  (0-65535). Put the mail server in `content` and the preference number in
+  `priority`. Priority is required for `MX` and rejected for every other type,
+  both checked at plan time. The previous SDK never sent priority, so `MX`
+  records failed with an API error. Verified against the live platform.
+
+### Changed
+
+- Upgraded the zcp-cli SDK from v0.0.24 to v0.0.25, which adds DNS record
+  priority support.
+- `zcp_dns_record` no longer lists `SRV` among the documented `type` values. The
+  DNS API rejects `SRV` and `LOC` records, so advertising `SRV` was misleading.
+  This is a documentation change. `type` is still a free-form string.
+
 ## [v0.1.1] - 2026-07-18
 
 ### Changed

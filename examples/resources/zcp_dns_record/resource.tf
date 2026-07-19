@@ -19,3 +19,13 @@ resource "zcp_dns_record" "spf" {
   content = "\"v=spf1 -all\""
   ttl     = 3600
 }
+
+# MX record: priority is required and goes in its own argument.
+resource "zcp_dns_record" "mx" {
+  domain   = zcp_dns_domain.example.id
+  name     = "@"
+  type     = "MX"
+  content  = "mail.example.com."
+  priority = 10
+  ttl      = 3600
+}

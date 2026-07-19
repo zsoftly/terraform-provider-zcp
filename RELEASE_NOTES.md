@@ -1,5 +1,22 @@
 # terraform-provider-zcp Release Notes
 
+## v0.1.2 (2026-07-18)
+
+Adds `MX` record support to `zcp_dns_record`.
+
+- `zcp_dns_record` takes a new `priority` argument (0-65535) for `MX` records.
+  Put the mail server in `content` and the preference number in `priority`.
+  Priority is required for `MX` and rejected for other types, checked at plan
+  time so a mistake fails before apply.
+- Dropped `SRV` from the documented `type` values. The DNS API rejects `SRV` and
+  `LOC` records, so the provider no longer advertises them. `type` stays a
+  free-form string.
+
+Built on the zcp-cli SDK v0.0.25. The record path was verified against the live
+DNS API, and the provider logic is covered by unit tests.
+
+---
+
 ## v0.1.1 (2026-07-18)
 
 A bug-fix release. Destroying a resource now releases the public IP it created,
