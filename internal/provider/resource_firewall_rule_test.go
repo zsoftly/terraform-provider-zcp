@@ -138,14 +138,18 @@ func deleteFirewallRule(t *testing.T, svc *fakeFirewallService, ipAddress, id st
 }
 
 func TestFirewallRuleResource_createHappyPath(t *testing.T) {
+	// Creation returns no rule object (data: null), so the resource recovers the
+	// ID by polling the list and matching on protocol, ports, and CIDR.
 	svc := &fakeFirewallService{
-		created: &firewall.FirewallRule{
-			ID:        "fw-uuid-1",
-			Protocol:  "tcp",
-			CIDRList:  "0.0.0.0/0",
-			StartPort: "80",
-			EndPort:   "80",
-			State:     "Active",
+		rules: []firewall.FirewallRule{
+			{
+				ID:        "fw-uuid-1",
+				Protocol:  "tcp",
+				CIDRList:  "0.0.0.0/0",
+				StartPort: "80",
+				EndPort:   "80",
+				State:     "Active",
+			},
 		},
 	}
 	resp := createFirewallRule(t, svc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")

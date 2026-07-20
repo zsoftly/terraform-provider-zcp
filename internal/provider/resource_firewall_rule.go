@@ -152,16 +152,69 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 		createReq.EndPort = model.EndPort.ValueString()
 	}
 
-	rule, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq)
-	if err != nil {
+	if _, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create firewall rule", err.Error())
 		return
 	}
 
-	model.ID = types.StringValue(rule.ID)
+	// Creation is asynchronous and returns no rule object (data: null), so poll
+	// the rule list and match on protocol, ports, and CIDR to recover the new
+	// rule's ID and state.
+	ipSlug := model.IPAddress.ValueString()
+	var found firewall.FirewallRule
+	if err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+		rules, err := r.svc.List(ctx, ipSlug)
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if firewallRuleMatches(rule, model) {
+				found = rule
+				return true, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		resp.Diagnostics.AddError(
+			"Firewall rule did not appear after create",
+			fmt.Sprintf("the rule was accepted but never showed up on IP %s: %s", ipSlug, err),
+		)
+		return
+	}
+
+	model.ID = types.StringValue(found.ID)
 	// state is Computed; an unknown value after Create fails the apply.
-	model.State = stateOrNull(rule.State)
+	model.State = stateOrNull(found.State)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// firewallRuleMatches reports whether a listed rule is the one just created:
+// creation returns no ID, so the rule is identified by its protocol, ports, and
+// CIDR. A blank plan port or CIDR (e.g. an icmp rule, or a default CIDR) is not
+// used to exclude a rule.
+func firewallRuleMatches(rule firewall.FirewallRule, model firewallRuleResourceModel) bool {
+	if !strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) {
+		return false
+	}
+	if fwPortString(rule.StartPort) != model.StartPort.ValueString() {
+		return false
+	}
+	if fwPortString(rule.EndPort) != model.EndPort.ValueString() {
+		return false
+	}
+	if model.CIDRList.ValueString() != "" && rule.CIDRList != model.CIDRList.ValueString() {
+		return false
+	}
+	return true
+}
+
+// fwPortString renders a firewall rule port (returned as string or number) for
+// comparison; a nil port becomes the empty string.
+func fwPortString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
 }
 
 func (r *firewallRuleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

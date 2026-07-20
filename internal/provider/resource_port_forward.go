@@ -155,16 +155,50 @@ func (r *portForwardResource) Create(ctx context.Context, req resource.CreateReq
 		createReq.PrivateEndPort = model.PrivateEndPort.ValueString()
 	}
 
-	rule, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq)
-	if err != nil {
+	if _, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create port forwarding rule", err.Error())
 		return
 	}
 
-	model.ID = types.StringValue(rule.ID)
+	// Creation is asynchronous and returns no rule object (data: null), so the
+	// new rule's ID is not in the response. Poll the rule list and match on
+	// protocol and ports to recover it.
+	ipSlug := model.IPAddress.ValueString()
+	var found portforward.PortForwardRule
+	if err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+		rules, err := r.svc.List(ctx, ipSlug)
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if portForwardRuleMatches(rule, model) {
+				found = rule
+				return true, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		resp.Diagnostics.AddError(
+			"Port forwarding rule did not appear after create",
+			fmt.Sprintf("the rule was accepted but never showed up on IP %s: %s", ipSlug, err),
+		)
+		return
+	}
+
+	model.ID = types.StringValue(found.ID)
 	// state is Computed; an unknown value after Create fails the apply.
-	model.State = stateOrNull(rule.State)
+	model.State = stateOrNull(found.State)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// portForwardRuleMatches reports whether a listed rule is the one just created:
+// creation returns no ID, so the rule is identified by its protocol and public
+// and private start ports. Protocol separates a rule from any same-port
+// companion the platform creates for the other protocol.
+func portForwardRuleMatches(rule portforward.PortForwardRule, model portForwardResourceModel) bool {
+	return strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) &&
+		rule.PublicStartPort == model.PublicStartPort.ValueString() &&
+		rule.PrivateStartPort == model.PrivateStartPort.ValueString()
 }
 
 func (r *portForwardResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

@@ -5,6 +5,23 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [v0.1.3] - 2026-07-20
+
+### Fixed
+
+- **`zcp_port_forward` and `zcp_firewall_rule` now capture the created rule's
+  ID.** The create endpoint accepts the request asynchronously and returns no
+  rule object, so the resources were storing an empty ID. A read then failed to
+  find the rule and Terraform planned to recreate it on every apply. Both
+  resources now poll the rule list after create and match on protocol and ports
+  (and CIDR for firewall rules) to record the real ID and state.
+
+### Changed
+
+- Upgraded the zcp-cli SDK from v0.0.25 to v0.0.26. This corrects how port
+  forwarding rule ports are decoded from the API, which the port-forward
+  resource relies on to match a rule after create.
+
 ## [v0.1.2] - 2026-07-18
 
 ### Added

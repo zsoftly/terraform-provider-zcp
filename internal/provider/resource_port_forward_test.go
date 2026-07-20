@@ -146,13 +146,18 @@ func deletePortForward(t *testing.T, svc *fakePortForwardService, ruleID string)
 }
 
 func TestPortForwardResource_createHappyPath(t *testing.T) {
+	// Creation returns no rule object (data: null), so the resource recovers the
+	// ID by polling the list and matching on protocol and ports. The fake List
+	// returns the rule; the fake Create returns nothing, like the live API.
 	svc := &fakePortForwardService{
-		created: &portforward.PortForwardRule{
-			ID:               "pf-uuid-1",
-			Protocol:         "tcp",
-			PublicStartPort:  "80",
-			PrivateStartPort: "8080",
-			State:            "active",
+		rules: []portforward.PortForwardRule{
+			{
+				ID:               "pf-uuid-1",
+				Protocol:         "tcp",
+				PublicStartPort:  "80",
+				PrivateStartPort: "8080",
+				State:            "active",
+			},
 		},
 	}
 	resp := createPortForward(t, svc)
