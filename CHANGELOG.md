@@ -26,6 +26,13 @@ to [Semantic Versioning](https://semver.org/).
   forwarding rule ports are decoded from the API, which the port-forward
   resource relies on to match a rule after create.
 
+### Security
+
+- Upgraded `golang.org/x/text` to v0.39.0 to resolve GO-2026-5970, an infinite
+  loop on invalid input. The vulnerable path was reachable through the load
+  balancer resource. `golang.org/x/sys` and `golang.org/x/tools` moved forward
+  with it.
+
 ## [v0.1.2] - 2026-07-18
 
 ### Added
