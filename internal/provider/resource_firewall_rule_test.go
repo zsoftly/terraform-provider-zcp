@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -19,7 +20,6 @@ import (
 // fakeFirewallService satisfies firewallServiceIface.
 type fakeFirewallService struct {
 	rules   []firewall.FirewallRule
-	created *firewall.FirewallRule
 	err     error
 	deleted []string
 }
@@ -27,8 +27,11 @@ type fakeFirewallService struct {
 func (f *fakeFirewallService) List(_ context.Context, _ string) ([]firewall.FirewallRule, error) {
 	return f.rules, f.err
 }
+
+// Create returns no rule object, matching the live API's asynchronous accept
+// (data: null). The resource recovers the rule by polling List.
 func (f *fakeFirewallService) Create(_ context.Context, _ string, _ firewall.CreateRequest) (*firewall.FirewallRule, error) {
-	return f.created, f.err
+	return nil, f.err
 }
 func (f *fakeFirewallService) Delete(_ context.Context, _ string, ruleID string) error {
 	f.deleted = append(f.deleted, ruleID)
@@ -176,6 +179,80 @@ func TestFirewallRuleResource_createServiceError(t *testing.T) {
 	resp := createFirewallRule(t, svc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure, got none")
+	}
+}
+
+// The live API returns ports as JSON numbers (float64), not strings, so the
+// match must render them through fwPortString.
+func TestFirewallRuleResource_createMatchesNumericPorts(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-num", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: float64(80), EndPort: float64(80), State: "Active"},
+		},
+	}
+	resp := createFirewallRule(t, svc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("numeric ports should match: %v", resp.Diagnostics)
+	}
+	var got firewallRuleStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.ID.ValueString() != "fw-num" {
+		t.Errorf("ID = %q, want fw-num (matched via numeric port)", got.ID.ValueString())
+	}
+}
+
+// The API may echo cidr_list in a different order and spacing. The match must
+// still find the rule (regression for the exact-string-match bug).
+func TestFirewallRuleResource_createMatchesReorderedCIDR(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-cidr", Protocol: "tcp", CIDRList: "192.168.0.0/16, 10.0.0.0/8", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	resp := createFirewallRule(t, svc, "1036521143", "tcp", "10.0.0.0/8,192.168.0.0/16", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("reordered cidr_list should still match: %v", resp.Diagnostics)
+	}
+	var got firewallRuleStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.ID.ValueString() != "fw-cidr" {
+		t.Errorf("ID = %q, want fw-cidr (matched via unordered CIDR set)", got.ID.ValueString())
+	}
+}
+
+// When no listed rule matches, Create must surface the "did not appear" error
+// rather than hang. A short create timeout exercises the poll-timeout branch.
+func TestFirewallRuleResource_createNeverAppears(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "other", Protocol: "udp", StartPort: "53", EndPort: "53"},
+		},
+	}
+	r := internalprovider.NewFirewallRuleResourceWithService(svc)
+	schResp := firewallRuleSchema(t)
+	tfType := firewallRuleTFType(t)
+	planVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
+		"id":                    tftypes.NewValue(tftypes.String, nil),
+		"ip_address":            tftypes.NewValue(tftypes.String, "1036521143"),
+		"protocol":              tftypes.NewValue(tftypes.String, "tcp"),
+		"cidr_list":             tftypes.NewValue(tftypes.String, "0.0.0.0/0"),
+		"destination_cidr_list": tftypes.NewValue(tftypes.String, nil),
+		"start_port":            tftypes.NewValue(tftypes.String, "80"),
+		"end_port":              tftypes.NewValue(tftypes.String, "80"),
+		"state":                 tftypes.NewValue(tftypes.String, nil),
+		"timeouts":              timeoutsNull(t, schResp),
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
+	defer cancel()
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(ctx, createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected 'did not appear after create' error when no rule matches")
 	}
 }
 

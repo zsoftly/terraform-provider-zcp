@@ -191,14 +191,33 @@ func (r *portForwardResource) Create(ctx context.Context, req resource.CreateReq
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-// portForwardRuleMatches reports whether a listed rule is the one just created:
-// creation returns no ID, so the rule is identified by its protocol and public
-// and private start ports. Protocol separates a rule from any same-port
-// companion the platform creates for the other protocol.
+// portForwardRuleMatches reports whether a listed rule is the one just created.
+// Creation returns no ID, so the rule is identified by its protocol and ports.
+// Protocol separates a rule from any same-port companion the platform creates
+// for the other protocol. End ports narrow the match only when the plan set
+// them, so a single-port rule (whose end port may echo the start or be absent)
+// still matches.
+//
+// Known limitation: if an identical rule already exists on the IP, the first
+// list match wins, so the wrong rule's ID can be recorded. This is inherent to
+// the API returning no correlation token on create.
 func portForwardRuleMatches(rule portforward.PortForwardRule, model portForwardResourceModel) bool {
-	return strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) &&
-		rule.PublicStartPort == model.PublicStartPort.ValueString() &&
-		rule.PrivateStartPort == model.PrivateStartPort.ValueString()
+	if !strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) {
+		return false
+	}
+	if rule.PublicStartPort != model.PublicStartPort.ValueString() {
+		return false
+	}
+	if rule.PrivateStartPort != model.PrivateStartPort.ValueString() {
+		return false
+	}
+	if model.PublicEndPort.ValueString() != "" && rule.PublicEndPort != model.PublicEndPort.ValueString() {
+		return false
+	}
+	if model.PrivateEndPort.ValueString() != "" && rule.PrivateEndPort != model.PrivateEndPort.ValueString() {
+		return false
+	}
+	return true
 }
 
 func (r *portForwardResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

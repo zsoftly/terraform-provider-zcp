@@ -14,7 +14,11 @@ to [Semantic Versioning](https://semver.org/).
   rule object, so the resources were storing an empty ID. A read then failed to
   find the rule and Terraform planned to recreate it on every apply. Both
   resources now poll the rule list after create and match on protocol and ports
-  (and CIDR for firewall rules) to record the real ID and state.
+  (and CIDR for firewall rules) to record the real ID and state. Blank plan
+  fields do not narrow the match, ports compare with `0` treated as no port, and
+  CIDR lists compare as unordered sets so the API can echo them in any order.
+  Known limitation: when an identical rule already exists on the same IP, the
+  first list match wins, because the create API returns no correlation token.
 
 ### Changed
 

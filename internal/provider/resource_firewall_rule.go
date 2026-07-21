@@ -188,33 +188,92 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-// firewallRuleMatches reports whether a listed rule is the one just created:
-// creation returns no ID, so the rule is identified by its protocol, ports, and
-// CIDR. A blank plan port or CIDR (e.g. an icmp rule, or a default CIDR) is not
-// used to exclude a rule.
+// firewallRuleMatches reports whether a listed rule is the one just created.
+// Creation returns no ID, so the rule is identified by its fields. The match is
+// built to avoid false negatives, which are the dangerous case: a rule that was
+// created but not matched fails the apply and is left orphaned. So a plan field
+// that is blank (an icmp rule with no ports, an omitted end port or CIDR) does
+// not exclude a rule, ports compare with 0 treated as no-port, and CIDR lists
+// compare unordered.
+//
+// Known limitation: if an identical rule already exists on the IP (or the
+// platform adds a same-port companion), the first list match wins, so the wrong
+// rule's ID can be recorded. This is inherent to the API returning no
+// correlation token on create.
 func firewallRuleMatches(rule firewall.FirewallRule, model firewallRuleResourceModel) bool {
 	if !strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) {
 		return false
 	}
-	if fwPortString(rule.StartPort) != model.StartPort.ValueString() {
+	if !fwPortEqual(fwPortString(rule.StartPort), model.StartPort.ValueString()) {
 		return false
 	}
-	if fwPortString(rule.EndPort) != model.EndPort.ValueString() {
+	// Only narrow on the end port when the plan set one: a single-port rule may
+	// come back with the end port equal to the start or absent, and either must
+	// still match.
+	if model.EndPort.ValueString() != "" && !fwPortEqual(fwPortString(rule.EndPort), model.EndPort.ValueString()) {
 		return false
 	}
-	if model.CIDRList.ValueString() != "" && rule.CIDRList != model.CIDRList.ValueString() {
+	if model.CIDRList.ValueString() != "" && !cidrListEqual(rule.CIDRList, model.CIDRList.ValueString()) {
+		return false
+	}
+	if model.DestinationCIDRList.ValueString() != "" && !cidrListEqual(rule.DestinationCIDRList, model.DestinationCIDRList.ValueString()) {
 		return false
 	}
 	return true
 }
 
-// fwPortString renders a firewall rule port (returned as string or number) for
-// comparison; a nil port becomes the empty string.
+// fwPortString renders a firewall rule port (returned as a string or a JSON
+// number) for comparison. A nil port becomes the empty string.
 func fwPortString(v interface{}) string {
 	if v == nil {
 		return ""
 	}
 	return fmt.Sprintf("%v", v)
+}
+
+// fwPortEqual compares two firewall port strings, treating "0" and "" as the
+// same absent value so an icmp rule matches whether the API returns 0 or null.
+func fwPortEqual(a, b string) bool {
+	norm := func(s string) string {
+		if s == "0" {
+			return ""
+		}
+		return s
+	}
+	return norm(a) == norm(b)
+}
+
+// cidrListEqual compares two comma-separated CIDR lists as unordered sets. The
+// API may reorder or re-space the value it echoes, so byte equality is unsafe.
+func cidrListEqual(a, b string) bool {
+	return equalStringSet(splitCIDRs(a), splitCIDRs(b))
+}
+
+func splitCIDRs(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func equalStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+		if seen[x] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *firewallRuleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

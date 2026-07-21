@@ -19,7 +19,6 @@ import (
 // fakePortForwardService satisfies portForwardServiceIface.
 type fakePortForwardService struct {
 	rules   []portforward.PortForwardRule
-	created *portforward.PortForwardRule
 	err     error
 	deleted []string
 }
@@ -27,8 +26,11 @@ type fakePortForwardService struct {
 func (f *fakePortForwardService) List(_ context.Context, _ string) ([]portforward.PortForwardRule, error) {
 	return f.rules, f.err
 }
+
+// Create returns no rule object, matching the live API's asynchronous accept
+// (data: null). The resource recovers the rule by polling List.
 func (f *fakePortForwardService) Create(_ context.Context, _ string, _ portforward.CreateRequest) (*portforward.PortForwardRule, error) {
-	return f.created, f.err
+	return nil, f.err
 }
 func (f *fakePortForwardService) Delete(_ context.Context, _ string, ruleID string) error {
 	f.deleted = append(f.deleted, ruleID)
