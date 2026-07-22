@@ -185,6 +185,17 @@ func (r *portForwardResource) Create(ctx context.Context, req resource.CreateReq
 		return
 	}
 
+	// The match keys on protocol and ports, not on the ID, so guard against a
+	// matched rule that came back without one. Persisting an empty ID would put
+	// the resource right back into the recreate loop this fix removes.
+	if found.ID == "" {
+		resp.Diagnostics.AddError(
+			"Port forwarding rule created without an ID",
+			fmt.Sprintf("the matching rule on IP %s was returned without an ID, so it cannot be tracked. Check the rule manually and remove it if it is orphaned.", ipSlug),
+		)
+		return
+	}
+
 	model.ID = types.StringValue(found.ID)
 	// state is Computed; an unknown value after Create fails the apply.
 	model.State = stateOrNull(found.State)

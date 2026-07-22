@@ -256,6 +256,20 @@ func TestFirewallRuleResource_createNeverAppears(t *testing.T) {
 	}
 }
 
+// A matched rule returned without an ID must not be persisted, or the resource
+// falls back into the recreate loop. Create must error instead.
+func TestFirewallRuleResource_createEmptyIDErrors(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	resp := createFirewallRule(t, svc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the matched rule has an empty ID")
+	}
+}
+
 func TestFirewallRuleResource_readFound(t *testing.T) {
 	svc := &fakeFirewallService{
 		rules: []firewall.FirewallRule{

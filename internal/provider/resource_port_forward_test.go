@@ -189,6 +189,20 @@ func TestPortForwardResource_createServiceError(t *testing.T) {
 	}
 }
 
+// A matched rule returned without an ID must not be persisted, or the resource
+// falls back into the recreate loop. Create must error instead.
+func TestPortForwardResource_createEmptyIDErrors(t *testing.T) {
+	svc := &fakePortForwardService{
+		rules: []portforward.PortForwardRule{
+			{ID: "", Protocol: "tcp", PublicStartPort: "80", PrivateStartPort: "8080", State: "active"},
+		},
+	}
+	resp := createPortForward(t, svc)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the matched rule has an empty ID")
+	}
+}
+
 func TestPortForwardResource_readFound(t *testing.T) {
 	svc := &fakePortForwardService{
 		rules: []portforward.PortForwardRule{
