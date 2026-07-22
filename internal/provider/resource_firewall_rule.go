@@ -152,16 +152,139 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 		createReq.EndPort = model.EndPort.ValueString()
 	}
 
-	rule, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq)
-	if err != nil {
+	if _, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create firewall rule", err.Error())
 		return
 	}
 
-	model.ID = types.StringValue(rule.ID)
+	// Creation is asynchronous and returns no rule object (data: null), so poll
+	// the rule list and match on protocol, ports, and CIDR to recover the new
+	// rule's ID and state.
+	ipSlug := model.IPAddress.ValueString()
+	var found firewall.FirewallRule
+	if err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+		rules, err := r.svc.List(ctx, ipSlug)
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if firewallRuleMatches(rule, model) {
+				found = rule
+				return true, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		resp.Diagnostics.AddError(
+			"Firewall rule did not appear after create",
+			fmt.Sprintf("the rule was accepted but never showed up on IP %s: %s", ipSlug, err),
+		)
+		return
+	}
+
+	// The match keys on protocol and ports, not on the ID, so guard against a
+	// matched rule that came back without one. Persisting an empty ID would put
+	// the resource right back into the recreate loop this fix removes.
+	if found.ID == "" {
+		resp.Diagnostics.AddError(
+			"Firewall rule created without an ID",
+			fmt.Sprintf("the matching rule on IP %s was returned without an ID, so it cannot be tracked. Check the rule manually and remove it if it is orphaned.", ipSlug),
+		)
+		return
+	}
+
+	model.ID = types.StringValue(found.ID)
 	// state is Computed; an unknown value after Create fails the apply.
-	model.State = stateOrNull(rule.State)
+	model.State = stateOrNull(found.State)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// firewallRuleMatches reports whether a listed rule is the one just created.
+// Creation returns no ID, so the rule is identified by its fields. The match is
+// built to avoid false negatives, which are the dangerous case: a rule that was
+// created but not matched fails the apply and is left orphaned. So a plan field
+// that is blank (an icmp rule with no ports, an omitted end port or CIDR) does
+// not exclude a rule, ports compare with 0 treated as no-port, and CIDR lists
+// compare unordered.
+//
+// Known limitation: if an identical rule already exists on the IP (or the
+// platform adds a same-port companion), the first list match wins, so the wrong
+// rule's ID can be recorded. This is inherent to the API returning no
+// correlation token on create.
+func firewallRuleMatches(rule firewall.FirewallRule, model firewallRuleResourceModel) bool {
+	if !strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) {
+		return false
+	}
+	if !fwPortEqual(fwPortString(rule.StartPort), model.StartPort.ValueString()) {
+		return false
+	}
+	// Only narrow on the end port when the plan set one: a single-port rule may
+	// come back with the end port equal to the start or absent, and either must
+	// still match.
+	if model.EndPort.ValueString() != "" && !fwPortEqual(fwPortString(rule.EndPort), model.EndPort.ValueString()) {
+		return false
+	}
+	if model.CIDRList.ValueString() != "" && !cidrListEqual(rule.CIDRList, model.CIDRList.ValueString()) {
+		return false
+	}
+	if model.DestinationCIDRList.ValueString() != "" && !cidrListEqual(rule.DestinationCIDRList, model.DestinationCIDRList.ValueString()) {
+		return false
+	}
+	return true
+}
+
+// fwPortString renders a firewall rule port (returned as a string or a JSON
+// number) for comparison. A nil port becomes the empty string.
+func fwPortString(v interface{}) string {
+	if v == nil {
+		return ""
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// fwPortEqual compares two firewall port strings, treating "0" and "" as the
+// same absent value so an icmp rule matches whether the API returns 0 or null.
+func fwPortEqual(a, b string) bool {
+	norm := func(s string) string {
+		if s == "0" {
+			return ""
+		}
+		return s
+	}
+	return norm(a) == norm(b)
+}
+
+// cidrListEqual compares two comma-separated CIDR lists as unordered sets. The
+// API may reorder or re-space the value it echoes, so byte equality is unsafe.
+func cidrListEqual(a, b string) bool {
+	return equalStringSet(splitCIDRs(a), splitCIDRs(b))
+}
+
+func splitCIDRs(s string) []string {
+	out := []string{}
+	for _, p := range strings.Split(s, ",") {
+		if t := strings.TrimSpace(p); t != "" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func equalStringSet(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	seen := make(map[string]int, len(a))
+	for _, x := range a {
+		seen[x]++
+	}
+	for _, x := range b {
+		seen[x]--
+		if seen[x] < 0 {
+			return false
+		}
+	}
+	return true
 }
 
 func (r *firewallRuleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

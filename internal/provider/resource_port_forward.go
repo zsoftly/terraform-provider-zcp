@@ -155,16 +155,80 @@ func (r *portForwardResource) Create(ctx context.Context, req resource.CreateReq
 		createReq.PrivateEndPort = model.PrivateEndPort.ValueString()
 	}
 
-	rule, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq)
-	if err != nil {
+	if _, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create port forwarding rule", err.Error())
 		return
 	}
 
-	model.ID = types.StringValue(rule.ID)
+	// Creation is asynchronous and returns no rule object (data: null), so the
+	// new rule's ID is not in the response. Poll the rule list and match on
+	// protocol and ports to recover it.
+	ipSlug := model.IPAddress.ValueString()
+	var found portforward.PortForwardRule
+	if err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
+		rules, err := r.svc.List(ctx, ipSlug)
+		if err != nil {
+			return false, err
+		}
+		for _, rule := range rules {
+			if portForwardRuleMatches(rule, model) {
+				found = rule
+				return true, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		resp.Diagnostics.AddError(
+			"Port forwarding rule did not appear after create",
+			fmt.Sprintf("the rule was accepted but never showed up on IP %s: %s", ipSlug, err),
+		)
+		return
+	}
+
+	// The match keys on protocol and ports, not on the ID, so guard against a
+	// matched rule that came back without one. Persisting an empty ID would put
+	// the resource right back into the recreate loop this fix removes.
+	if found.ID == "" {
+		resp.Diagnostics.AddError(
+			"Port forwarding rule created without an ID",
+			fmt.Sprintf("the matching rule on IP %s was returned without an ID, so it cannot be tracked. Check the rule manually and remove it if it is orphaned.", ipSlug),
+		)
+		return
+	}
+
+	model.ID = types.StringValue(found.ID)
 	// state is Computed; an unknown value after Create fails the apply.
-	model.State = stateOrNull(rule.State)
+	model.State = stateOrNull(found.State)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+// portForwardRuleMatches reports whether a listed rule is the one just created.
+// Creation returns no ID, so the rule is identified by its protocol and ports.
+// Protocol separates a rule from any same-port companion the platform creates
+// for the other protocol. End ports narrow the match only when the plan set
+// them, so a single-port rule (whose end port may echo the start or be absent)
+// still matches.
+//
+// Known limitation: if an identical rule already exists on the IP, the first
+// list match wins, so the wrong rule's ID can be recorded. This is inherent to
+// the API returning no correlation token on create.
+func portForwardRuleMatches(rule portforward.PortForwardRule, model portForwardResourceModel) bool {
+	if !strings.EqualFold(rule.Protocol, model.Protocol.ValueString()) {
+		return false
+	}
+	if rule.PublicStartPort != model.PublicStartPort.ValueString() {
+		return false
+	}
+	if rule.PrivateStartPort != model.PrivateStartPort.ValueString() {
+		return false
+	}
+	if model.PublicEndPort.ValueString() != "" && rule.PublicEndPort != model.PublicEndPort.ValueString() {
+		return false
+	}
+	if model.PrivateEndPort.ValueString() != "" && rule.PrivateEndPort != model.PrivateEndPort.ValueString() {
+		return false
+	}
+	return true
 }
 
 func (r *portForwardResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

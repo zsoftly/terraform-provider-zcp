@@ -1,5 +1,21 @@
 # terraform-provider-zcp Release Notes
 
+## v0.1.3 (2026-07-20)
+
+Fixes `zcp_port_forward` and `zcp_firewall_rule`.
+
+Creating either resource used to record an empty ID. The create endpoint accepts
+the request asynchronously and returns no rule object, so there was no ID to
+store. On the next plan a read failed to find the resource and Terraform tried
+to recreate it every time. Both resources now poll the rule list after create
+and match on protocol and ports (and CIDR for firewall rules) to record the real
+ID and state, so the resource stays stable across plans.
+
+Built on the zcp-cli SDK v0.0.26, which also corrects how port forwarding rule
+ports are decoded from the API.
+
+---
+
 ## v0.1.2 (2026-07-18)
 
 Adds `MX` record support to `zcp_dns_record`.

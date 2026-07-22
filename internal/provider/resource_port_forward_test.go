@@ -19,7 +19,6 @@ import (
 // fakePortForwardService satisfies portForwardServiceIface.
 type fakePortForwardService struct {
 	rules   []portforward.PortForwardRule
-	created *portforward.PortForwardRule
 	err     error
 	deleted []string
 }
@@ -27,8 +26,11 @@ type fakePortForwardService struct {
 func (f *fakePortForwardService) List(_ context.Context, _ string) ([]portforward.PortForwardRule, error) {
 	return f.rules, f.err
 }
+
+// Create returns no rule object, matching the live API's asynchronous accept
+// (data: null). The resource recovers the rule by polling List.
 func (f *fakePortForwardService) Create(_ context.Context, _ string, _ portforward.CreateRequest) (*portforward.PortForwardRule, error) {
-	return f.created, f.err
+	return nil, f.err
 }
 func (f *fakePortForwardService) Delete(_ context.Context, _ string, ruleID string) error {
 	f.deleted = append(f.deleted, ruleID)
@@ -146,13 +148,18 @@ func deletePortForward(t *testing.T, svc *fakePortForwardService, ruleID string)
 }
 
 func TestPortForwardResource_createHappyPath(t *testing.T) {
+	// Creation returns no rule object (data: null), so the resource recovers the
+	// ID by polling the list and matching on protocol and ports. The fake List
+	// returns the rule; the fake Create returns nothing, like the live API.
 	svc := &fakePortForwardService{
-		created: &portforward.PortForwardRule{
-			ID:               "pf-uuid-1",
-			Protocol:         "tcp",
-			PublicStartPort:  "80",
-			PrivateStartPort: "8080",
-			State:            "active",
+		rules: []portforward.PortForwardRule{
+			{
+				ID:               "pf-uuid-1",
+				Protocol:         "tcp",
+				PublicStartPort:  "80",
+				PrivateStartPort: "8080",
+				State:            "active",
+			},
 		},
 	}
 	resp := createPortForward(t, svc)
@@ -179,6 +186,20 @@ func TestPortForwardResource_createServiceError(t *testing.T) {
 	resp := createPortForward(t, svc)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure, got none")
+	}
+}
+
+// A matched rule returned without an ID must not be persisted, or the resource
+// falls back into the recreate loop. Create must error instead.
+func TestPortForwardResource_createEmptyIDErrors(t *testing.T) {
+	svc := &fakePortForwardService{
+		rules: []portforward.PortForwardRule{
+			{ID: "", Protocol: "tcp", PublicStartPort: "80", PrivateStartPort: "8080", State: "active"},
+		},
+	}
+	resp := createPortForward(t, svc)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the matched rule has an empty ID")
 	}
 }
 
