@@ -25,8 +25,8 @@ var _ resource.ResourceWithValidateConfig = &volumeResource{}
 type volumeServiceIface interface {
 	Create(ctx context.Context, req volume.CreateRequest) (*volume.Volume, error)
 	List(ctx context.Context, region, project string) ([]volume.Volume, error)
-	Attach(ctx context.Context, volumeSlug, vmSlug string) (*volume.Volume, error)
-	Detach(ctx context.Context, volumeSlug string) (*volume.Volume, error)
+	Attach(ctx context.Context, volumeSlug, vmSlug string) (*volume.ActionResponse, error)
+	Detach(ctx context.Context, volumeSlug string) (*volume.ActionResponse, error)
 	Delete(ctx context.Context, slug string) error
 }
 
