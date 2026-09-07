@@ -33,6 +33,22 @@ type fakeObjectStorageService struct {
 	tags           map[string]string
 	lifecycle      string
 	cors           string
+	lifecycleSet   *fakeLifecycleRequest
+	corsSet        *fakeCORSRequest
+}
+
+type fakeLifecycleRequest struct {
+	prefix             string
+	days               int
+	noncurrentDays     int
+	abortMultipartDays int
+}
+
+type fakeCORSRequest struct {
+	origins       []string
+	methods       []string
+	headers       []string
+	maxAgeSeconds int
 }
 
 func (f *fakeObjectStorageService) Get(_ context.Context, _ string) (*objectstorage.ObjectStorage, error) {
@@ -107,7 +123,8 @@ func (f *fakeObjectStorageService) DeleteBucketTagging(_ context.Context, _, _ s
 	f.tags = map[string]string{}
 	return f.err
 }
-func (f *fakeObjectStorageService) SetBucketExpiry(_ context.Context, _, _ string, _ string, _, _, _ int) error {
+func (f *fakeObjectStorageService) SetBucketExpiry(_ context.Context, _, _ string, prefix string, days, noncurrentDays, abortMultipartDays int) error {
+	f.lifecycleSet = &fakeLifecycleRequest{prefix: prefix, days: days, noncurrentDays: noncurrentDays, abortMultipartDays: abortMultipartDays}
 	return f.err
 }
 func (f *fakeObjectStorageService) GetBucketLifecycle(_ context.Context, _, _ string) (string, error) {
@@ -115,9 +132,16 @@ func (f *fakeObjectStorageService) GetBucketLifecycle(_ context.Context, _, _ st
 }
 func (f *fakeObjectStorageService) DeleteBucketLifecycle(_ context.Context, _, _ string) error {
 	f.lifecycle = ""
+	f.lifecycleSet = nil
 	return f.err
 }
-func (f *fakeObjectStorageService) SetBucketCORS(_ context.Context, _, _ string, _, _, _ []string, _ int) error {
+func (f *fakeObjectStorageService) SetBucketCORS(_ context.Context, _, _ string, origins, methods, headers []string, maxAgeSeconds int) error {
+	f.corsSet = &fakeCORSRequest{
+		origins:       append([]string(nil), origins...),
+		methods:       append([]string(nil), methods...),
+		headers:       append([]string(nil), headers...),
+		maxAgeSeconds: maxAgeSeconds,
+	}
 	return f.err
 }
 func (f *fakeObjectStorageService) GetBucketCORS(_ context.Context, _, _ string) (string, error) {
@@ -125,6 +149,7 @@ func (f *fakeObjectStorageService) GetBucketCORS(_ context.Context, _, _ string)
 }
 func (f *fakeObjectStorageService) DeleteBucketCORS(_ context.Context, _, _ string) error {
 	f.cors = ""
+	f.corsSet = nil
 	return f.err
 }
 

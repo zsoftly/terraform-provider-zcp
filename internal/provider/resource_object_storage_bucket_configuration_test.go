@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -71,6 +72,7 @@ func TestBucketConfigurationResourceCRUDAndDrift(t *testing.T) {
 			if createResp.Diagnostics.HasError() {
 				t.Fatalf("create diagnostics: %v", createResp.Diagnostics)
 			}
+			assertBucketConfigurationApplied(t, kind, svc)
 			if svc.versioning != "Enabled" && kind == "versioning" {
 				t.Fatalf("versioning = %q, want Enabled", svc.versioning)
 			}
@@ -101,12 +103,35 @@ func TestBucketConfigurationResourceCRUDAndDrift(t *testing.T) {
 			if updateResp.Diagnostics.HasError() {
 				t.Fatalf("update diagnostics: %v", updateResp.Diagnostics)
 			}
+			assertBucketConfigurationApplied(t, kind, svc)
 			deleteResp := &resource.DeleteResponse{}
 			r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: sch.Schema, Raw: updateResp.State.Raw}}, deleteResp)
 			if deleteResp.Diagnostics.HasError() {
 				t.Fatalf("delete diagnostics: %v", deleteResp.Diagnostics)
 			}
+			if kind == "lifecycle" && svc.lifecycleSet != nil {
+				t.Fatal("lifecycle configuration was not removed")
+			}
+			if kind == "cors" && svc.corsSet != nil {
+				t.Fatal("CORS configuration was not removed")
+			}
 		})
+	}
+}
+
+func assertBucketConfigurationApplied(t *testing.T, kind string, svc *fakeObjectStorageService) {
+	t.Helper()
+	switch kind {
+	case "lifecycle":
+		want := &fakeLifecycleRequest{prefix: "uploads/", days: 30, noncurrentDays: 7, abortMultipartDays: 1}
+		if !reflect.DeepEqual(svc.lifecycleSet, want) {
+			t.Fatalf("lifecycle request = %#v, want %#v", svc.lifecycleSet, want)
+		}
+	case "cors":
+		want := &fakeCORSRequest{origins: []string{"https://example.test"}, methods: []string{"GET"}, headers: []string{"Authorization"}, maxAgeSeconds: 300}
+		if !reflect.DeepEqual(svc.corsSet, want) {
+			t.Fatalf("CORS request = %#v, want %#v", svc.corsSet, want)
+		}
 	}
 }
 
