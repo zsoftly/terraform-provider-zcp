@@ -429,6 +429,28 @@ func TestInstanceResource_createAttachesExistingNetwork(t *testing.T) {
 	}
 }
 
+func TestInstanceResource_createNetworkWithEmptyNetworksAttachesExistingNetwork(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["networks"] = networksVal([]string{})
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if len(svc.createReq.Networks) != 1 || svc.createReq.Networks[0] != "app-net" {
+		t.Errorf("Networks = %v, want [app-net]", svc.createReq.Networks)
+	}
+}
+
 // TestInstanceResource_validateNetworkConflict verifies network + network_plan
 // together is rejected at plan time.
 func TestInstanceResource_validateNetworkConflict(t *testing.T) {
@@ -443,6 +465,57 @@ func TestInstanceResource_validateNetworkConflict(t *testing.T) {
 	r.ValidateConfig(context.Background(), req, &resp)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error when both network and network_plan are set")
+	}
+}
+
+func TestInstanceResource_validateNetworkAndEmptyNetworksAccepted(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["networks"] = networksVal([]string{})
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for network with empty networks: %v", resp.Diagnostics)
+	}
+}
+
+func TestInstanceResource_validateNetworkPlanAndEmptyNetworksAccepted(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+	vals["networks"] = networksVal([]string{})
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for network_plan with empty networks: %v", resp.Diagnostics)
+	}
+}
+
+func TestInstanceResource_validateNetworkPlanAndNetworksConflict(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+	vals["networks"] = networksVal([]string{"app-net"})
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when both network_plan and networks are set")
+	}
+}
+
+func TestInstanceResource_validateScalarNetworkSourceAndUnknownNetworksConflict(t *testing.T) {
+	for name, setSource := range map[string]func(map[string]tftypes.Value){
+		"network": func(vals map[string]tftypes.Value) {
+			vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+		},
+		"network_plan": func(vals map[string]tftypes.Value) {
+			vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vals := instanceValues(t, "")
+			setSource(vals)
+			vals["networks"] = tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, tftypes.UnknownValue)
+			resp := validateInstanceConfig(t, vals)
+			if !resp.Diagnostics.HasError() {
+				t.Fatalf("expected error when %s and an unknown networks list are set", name)
+			}
+		})
 	}
 }
 

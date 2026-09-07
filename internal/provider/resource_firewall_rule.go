@@ -140,7 +140,7 @@ func (r *firewallRuleResource) checkNotVPCPublicIP(ctx context.Context, ipSlug s
 	// project when one is configured, and falls back to unscoped otherwise.
 	ips, err := r.ipSvc.List(ctx, "", "", r.defaultProject)
 	if err != nil {
-		tflog.Warn(ctx, "could not check whether the IP address belongs to a VPC, continuing", map[string]interface{}{
+		tflog.Debug(ctx, "could not check whether the IP address belongs to a VPC, continuing", map[string]interface{}{
 			"ip_address": ipSlug,
 			"error":      err.Error(),
 		})
@@ -161,7 +161,7 @@ func (r *firewallRuleResource) checkNotVPCPublicIP(ctx context.Context, ipSlug s
 		}
 		return
 	}
-	tflog.Warn(ctx, "IP address not found in account IP list, continuing", map[string]interface{}{
+	tflog.Debug(ctx, "IP address not found in account IP list, continuing", map[string]interface{}{
 		"ip_address": ipSlug,
 	})
 }

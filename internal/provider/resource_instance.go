@@ -436,11 +436,18 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 			"`network` (attach to an existing network) and `network_plan` (auto-create a network) are mutually exclusive. Set only one.",
 		)
 	}
-	if networkSet && networksKnown {
+	if networkSet && networksMaybeProvided {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("networks"),
 			"Conflicting network configuration",
 			"`network` and `networks` are mutually exclusive. `networks` supersedes `network`. Set only one.",
+		)
+	}
+	if planSet && networksMaybeProvided {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("networks"),
+			"Conflicting network configuration",
+			"`network_plan` and `networks` are mutually exclusive. Set only one.",
 		)
 	}
 
@@ -572,18 +579,22 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// assign_public_ip defaults to true (current behaviour) when unset.
 	isPublic := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
 
-	// networks: `networks` (list) supersedes the single `network`, treating the
-	// latter as a one-element list (ValidateConfig rejects setting both).
+	// A non-empty `networks` list supersedes the single `network`, treating the
+	// latter as a one-element list. An empty list counts as unset, consistent
+	// with ValidateConfig.
 	var networks []string
 	if !model.Networks.IsNull() && !model.Networks.IsUnknown() {
 		resp.Diagnostics.Append(model.Networks.ElementsAs(ctx, &networks, false)...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
-	} else if net := model.Network.ValueString(); net != "" {
-		networks = []string{net}
+		networks = instance.NormalizeNetworks(networks)
 	}
-	networks = instance.NormalizeNetworks(networks)
+	if len(networks) == 0 {
+		if net := model.Network.ValueString(); net != "" {
+			networks = instance.NormalizeNetworks([]string{net})
+		}
+	}
 
 	networkType := model.NetworkType.ValueString()
 	if networkType == "" {
@@ -1113,5 +1124,10 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 	if len(networks) == 0 {
 		return
 	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networks)...)
+	networksValue, diags := types.ListValueFrom(ctx, types.StringType, networks)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networksValue)...)
 }

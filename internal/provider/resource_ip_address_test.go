@@ -205,7 +205,7 @@ func TestIPAddressResource_createServiceError(t *testing.T) {
 // while still surfacing the original API error text in the diagnostic detail.
 func TestIPAddressResource_createNoNetworksInVPCReplacesError(t *testing.T) {
 	origErr := "We cannot acquire IP Address when there are no networks in vpc."
-	svc := &fakeIPAddressService{err: errors.New(origErr)}
+	svc := &fakeIPAddressService{err: &apierrors.APIError{StatusCode: 422, Message: origErr}}
 	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected an error when the VPC has no network yet")
@@ -230,7 +230,7 @@ func TestIPAddressResource_createNoNetworksInVPCReplacesError(t *testing.T) {
 // `network` is set), the friendly message must not render an empty `VPC ""`.
 func TestIPAddressResource_createNoNetworksInVPCNullVPCOmitsEmptyName(t *testing.T) {
 	svc := &fakeIPAddressService{
-		err: errors.New("We cannot acquire IP Address when there are no networks in vpc."),
+		err: &apierrors.APIError{StatusCode: 422, Message: "We cannot acquire IP Address when there are no networks in vpc."},
 	}
 	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
 	if !resp.Diagnostics.HasError() {
@@ -249,7 +249,7 @@ func TestIPAddressResource_createNoNetworksInVPCNullVPCOmitsEmptyName(t *testing
 // When the vpc attribute is set, the friendly message names it.
 func TestIPAddressResource_createNoNetworksInVPCNamesConfiguredVPC(t *testing.T) {
 	svc := &fakeIPAddressService{
-		err: errors.New("We cannot acquire IP Address when there are no networks in vpc."),
+		err: &apierrors.APIError{StatusCode: 422, Message: "We cannot acquire IP Address when there are no networks in vpc."},
 	}
 	resp := createIPAddressWithVPC(t, svc, "public-ip-1", "hourly", "main-vpc")
 	if !resp.Diagnostics.HasError() {
@@ -263,6 +263,49 @@ func TestIPAddressResource_createNoNetworksInVPCNamesConfiguredVPC(t *testing.T)
 	}
 	if !found {
 		t.Errorf("expected the diagnostic to name VPC \"main-vpc\", got: %v", resp.Diagnostics)
+	}
+}
+
+func TestIPAddressResource_createNoNetworksInVPCWrongStatusDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 400, Message: "We cannot acquire IP Address when there are no networks in vpc."},
+	}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("wrong-status API error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
+	}
+}
+
+func TestIPAddressResource_createSimilarErrorDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 422, Message: "Cannot acquire IP Address because the selected plan has no networks in vpc."},
+	}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("similar API error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
+	}
+}
+
+func TestIPAddressResource_createUnstructuredNoNetworksErrorDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{err: errors.New("We cannot acquire IP Address when there are no networks in vpc.")}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("unstructured error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
 	}
 }
 

@@ -147,6 +147,13 @@ func (d *volumeDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 	}
 	resp.Diagnostics.AddError(
 		"Volume not found",
-		fmt.Sprintf("No volume with slug %q exists%s.", slug, regionScopeSuffix(region)),
+		fmt.Sprintf("No volume with slug %q exists%s%s.", slug, regionScopeSuffix(region), volumeProjectScopeSuffix(project)),
 	)
+}
+
+func volumeProjectScopeSuffix(project string) string {
+	if project == "" {
+		return ""
+	}
+	return fmt.Sprintf(" in project %q", project)
 }

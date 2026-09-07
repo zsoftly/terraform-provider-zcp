@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/volume"
@@ -106,5 +107,60 @@ func TestVolumeDataSource_notFound(t *testing.T) {
 	}
 	if got := resp.Diagnostics.Errors()[0].Summary(); got != "Volume not found" {
 		t.Errorf("unexpected summary: %q", got)
+	}
+}
+
+func TestVolumeDataSource_notFoundIncludesEffectiveScope(t *testing.T) {
+	tests := []struct {
+		name       string
+		ds         func(*fakeVolumeLister) datasource.DataSource
+		config     map[string]tftypes.Value
+		wantDetail string
+	}{
+		{
+			name: "configured project",
+			ds: func(lister *fakeVolumeLister) datasource.DataSource {
+				return internalprovider.NewVolumeDataSourceWithLister(lister)
+			},
+			config: map[string]tftypes.Value{
+				"slug":    strVal("missing"),
+				"project": strVal("project-a"),
+			},
+			wantDetail: `in project "project-a"`,
+		},
+		{
+			name: "region and configured project",
+			ds: func(lister *fakeVolumeLister) datasource.DataSource {
+				return internalprovider.NewVolumeDataSourceWithLister(lister)
+			},
+			config: map[string]tftypes.Value{
+				"slug":    strVal("missing"),
+				"region":  strVal("yow-1"),
+				"project": strVal("project-a"),
+			},
+			wantDetail: `in region "yow-1" in project "project-a"`,
+		},
+		{
+			name: "provider default project",
+			ds: func(lister *fakeVolumeLister) datasource.DataSource {
+				return internalprovider.NewVolumeDataSourceWithListerAndProject(lister, "default-project")
+			},
+			config: map[string]tftypes.Value{
+				"slug": strVal("missing"),
+			},
+			wantDetail: `in project "default-project"`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			resp := readDS(t, tt.ds(&fakeVolumeLister{}), tt.config)
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("expected error for missing slug, got none")
+			}
+			if got := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(got, tt.wantDetail) {
+				t.Errorf("detail = %q, want to contain %q", got, tt.wantDetail)
+			}
+		})
 	}
 }

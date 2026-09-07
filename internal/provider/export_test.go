@@ -372,6 +372,13 @@ func NewVolumeDataSourceWithLister(l volumeLister) datasource.DataSource {
 	return &volumeDataSource{svc: l}
 }
 
+// NewVolumeDataSourceWithListerAndProject creates a volumeDataSource pre-wired
+// with the given lister and provider default project; available only in test
+// binaries.
+func NewVolumeDataSourceWithListerAndProject(l volumeLister, defaultProject string) datasource.DataSource {
+	return &volumeDataSource{svc: l, defaultProject: defaultProject}
+}
+
 // NewPermissionsDataSourceWithLister creates a permissionsDataSource pre-wired
 // with the given lister; available only in test binaries.
 func NewPermissionsDataSourceWithLister(l permissionLister) datasource.DataSource {
