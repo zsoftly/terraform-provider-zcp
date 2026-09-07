@@ -394,6 +394,49 @@ func TestObjectStorageBucketResource_readNotFoundRemoves(t *testing.T) {
 	}
 }
 
+func TestObjectStorageBucketResource_readPreservesConfiguredName(t *testing.T) {
+	svc := &fakeObjectStorageService{bucket: &objectstorage.Bucket{
+		Slug: "tf-live-config-20260907-001024", Name: "tf-live-config-20260907-001024", Status: "Active",
+	}}
+	r := internalprovider.NewObjectStorageBucketResourceWithService(svc)
+	schResp := bucketSchema(t)
+	stateVal := bucketRaw(t, schResp, "tf-live-config-20260907-001024", "assets-x1", "tf-live-config-20260907")
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", readResp.Diagnostics)
+	}
+	var got bucketStateModel
+	if diags := readResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.Name.ValueString() != "tf-live-config-20260907" {
+		t.Errorf("name = %q, want configured name", got.Name.ValueString())
+	}
+	if got.Status.ValueString() != "Active" {
+		t.Errorf("status = %q, want Active", got.Status.ValueString())
+	}
+}
+
+func TestObjectStorageBucketResource_readSetsNameAfterImport(t *testing.T) {
+	svc := &fakeObjectStorageService{bucket: &objectstorage.Bucket{Slug: "media-b1", Name: "media", Status: "Active"}}
+	r := internalprovider.NewObjectStorageBucketResourceWithService(svc)
+	schResp := bucketSchema(t)
+	stateVal := bucketRaw(t, schResp, "media-b1", "assets-x1", "")
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", readResp.Diagnostics)
+	}
+	var got bucketStateModel
+	if diags := readResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.Name.ValueString() != "media" {
+		t.Errorf("name = %q, want media", got.Name.ValueString())
+	}
+}
+
 func TestObjectStorageBucketResource_deleteHappyPath(t *testing.T) {
 	svc := &fakeObjectStorageService{
 		bucket: &objectstorage.Bucket{Slug: "media-b1", Name: "media"},

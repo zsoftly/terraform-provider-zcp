@@ -17,9 +17,16 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 }
 
 func TestProvider_instantiates(t *testing.T) {
-	_, err := testAccProtoV6ProviderFactories["zcp"]()
+	server, err := testAccProtoV6ProviderFactories["zcp"]()
 	if err != nil {
 		t.Fatalf("unexpected error creating provider: %s", err)
+	}
+	resp, err := server.GetProviderSchema(context.Background(), &tfprotov6.GetProviderSchemaRequest{})
+	if err != nil {
+		t.Fatalf("unexpected error loading provider schema: %s", err)
+	}
+	if len(resp.Diagnostics) != 0 {
+		t.Fatalf("unexpected provider schema diagnostics: %v", resp.Diagnostics)
 	}
 }
 

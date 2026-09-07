@@ -7,8 +7,11 @@ delete handling. It uses the zcp-cli SDK v0.0.29.
 
 - New object storage bucket configuration resources manage versioning, policy,
   tags, lifecycle expiry, and CORS through the store's S3-compatible gateway.
-  They obtain gateway credentials internally and do not expose them as resource
-  attributes.
+  The SDK resolves the gateway endpoint from the selected object-storage
+  instance, without a hardcoded regional endpoint. They obtain gateway
+  credentials internally and do not expose them as resource attributes.
+- The provider serializes configuration writes to the same bucket and retries
+  gateway concurrent-modification responses during an apply.
 
 - `zcp_instance` supports VPC networks, multiple existing networks, and
   virtual-router plans. Plan validation rejects combinations the API does not

@@ -4,6 +4,12 @@ resource "zcp_object_storage_bucket_versioning" "assets" {
   enabled        = true
 }
 
+resource "zcp_object_storage_bucket_policy" "assets" {
+  object_storage = zcp_object_storage.assets.id
+  bucket         = zcp_object_storage_bucket.assets.id
+  policy         = jsonencode({ Version = "2012-10-17", Statement = [] })
+}
+
 resource "zcp_object_storage_bucket_tagging" "assets" {
   object_storage = zcp_object_storage.assets.id
   bucket         = zcp_object_storage_bucket.assets.id

@@ -3,8 +3,13 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
+	"sync"
+	"time"
+
+	"github.com/minio/minio-go/v7"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -19,11 +24,55 @@ import (
 	"github.com/zsoftly/zcp-cli/pkg/api/objectstorage"
 )
 
-// Bucket settings use the S3-compatible gateway. These resources do not expose
-// or retain the gateway access key or secret in their own resource state.
+// Bucket settings use the S3-compatible gateway. The SDK resolves its endpoint
+// from the selected object-storage instance. These resources do not expose or
+// retain the gateway access key or secret in their own resource state.
 type bucketConfigurationResource struct {
 	svc  objectStorageServiceIface
 	kind string
+}
+
+var bucketConfigurationLocks sync.Map
+
+func withBucketConfigurationWrite(ctx context.Context, store, bucket string, write func() error) error {
+	key := store + "/" + bucket
+	newLock := make(chan struct{}, 1)
+	newLock <- struct{}{}
+	value, _ := bucketConfigurationLocks.LoadOrStore(key, newLock)
+	lock := value.(chan struct{})
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-lock:
+	}
+	defer func() { lock <- struct{}{} }()
+	var err error
+	for attempt := 0; attempt < 4; attempt++ {
+		if err = write(); err == nil || !isConcurrentModification(err) {
+			return err
+		}
+		if attempt == 3 {
+			break
+		}
+		delay := time.Duration(50*(1<<attempt)) * time.Millisecond
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return err
+}
+
+func isConcurrentModification(err error) bool {
+	if err == nil {
+		return false
+	}
+	var response minio.ErrorResponse
+	if errors.As(err, &response) {
+		return response.Code == "ConcurrentModification"
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "concurrentmodification")
 }
 
 type bucketConfigurationModel struct {
@@ -94,7 +143,7 @@ func (r *bucketConfigurationResource) Schema(_ context.Context, _ resource.Schem
 	case "tagging":
 		a["tags"] = schema.MapAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "Complete set of bucket tags."}
 	case "lifecycle":
-		a["prefix"] = schema.StringAttribute{Optional: true, Default: stringdefault.StaticString(""), MarkdownDescription: "Object-key prefix covered by the lifecycle rule."}
+		a["prefix"] = schema.StringAttribute{Optional: true, Computed: true, Default: stringdefault.StaticString(""), MarkdownDescription: "Object-key prefix covered by the lifecycle rule."}
 		a["days"] = schema.Int64Attribute{Optional: true, MarkdownDescription: "Days before current objects expire."}
 		a["noncurrent_days"] = schema.Int64Attribute{Optional: true, MarkdownDescription: "Days before noncurrent object versions expire."}
 		a["abort_incomplete_multipart_upload_days"] = schema.Int64Attribute{Optional: true, MarkdownDescription: "Days before incomplete multipart uploads are aborted."}
@@ -102,9 +151,9 @@ func (r *bucketConfigurationResource) Schema(_ context.Context, _ resource.Schem
 		a["allowed_origins"] = schema.ListAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "Allowed CORS origins."}
 		a["allowed_methods"] = schema.ListAttribute{Required: true, ElementType: types.StringType, MarkdownDescription: "Allowed CORS methods."}
 		a["allowed_headers"] = schema.ListAttribute{Optional: true, ElementType: types.StringType, MarkdownDescription: "Allowed CORS request headers."}
-		a["max_age_seconds"] = schema.Int64Attribute{Optional: true, Default: int64default.StaticInt64(0), MarkdownDescription: "CORS preflight cache duration in seconds."}
+		a["max_age_seconds"] = schema.Int64Attribute{Optional: true, Computed: true, Default: int64default.StaticInt64(0), MarkdownDescription: "CORS preflight cache duration in seconds."}
 	}
-	resp.Schema = schema.Schema{MarkdownDescription: "Manages one bucket configuration through the object storage S3-compatible gateway.", Attributes: a}
+	resp.Schema = schema.Schema{MarkdownDescription: "Manages one bucket configuration through the S3-compatible gateway resolved by the SDK from the selected object storage instance.", Attributes: a}
 }
 
 func (r *bucketConfigurationResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
@@ -121,6 +170,9 @@ func (r *bucketConfigurationResource) ValidateConfig(ctx context.Context, req re
 		if m.Days.ValueInt64() <= 0 && m.NoncurrentDays.ValueInt64() <= 0 && m.AbortMultipartDays.ValueInt64() <= 0 {
 			resp.Diagnostics.AddError("Invalid lifecycle configuration", "Set at least one lifecycle duration greater than zero.")
 		}
+		if m.Days.ValueInt64() < 0 || m.NoncurrentDays.ValueInt64() < 0 || m.AbortMultipartDays.ValueInt64() < 0 {
+			resp.Diagnostics.AddError("Invalid lifecycle configuration", "Lifecycle durations cannot be negative.")
+		}
 	case "cors":
 		if m.AllowedOrigins.IsUnknown() || m.AllowedMethods.IsUnknown() {
 			return
@@ -128,13 +180,46 @@ func (r *bucketConfigurationResource) ValidateConfig(ctx context.Context, req re
 		if len(m.AllowedOrigins.Elements()) == 0 || len(m.AllowedMethods.Elements()) == 0 {
 			resp.Diagnostics.AddError("Invalid CORS configuration", "Set at least one allowed origin and one allowed method.")
 		}
+		for _, list := range []types.List{m.AllowedOrigins, m.AllowedMethods, m.AllowedHeaders} {
+			if list.IsNull() {
+				continue
+			}
+			for _, value := range list.Elements() {
+				s, ok := value.(types.String)
+				if !ok || s.IsUnknown() {
+					continue
+				}
+				if s.IsNull() {
+					resp.Diagnostics.AddError("Invalid CORS configuration", "CORS values cannot be null.")
+					return
+				}
+				if strings.TrimSpace(s.ValueString()) == "" {
+					resp.Diagnostics.AddError("Invalid CORS configuration", "CORS origins and methods cannot be empty.")
+					return
+				}
+			}
+		}
 	case "policy":
-		if !m.Policy.IsUnknown() && !json.Valid([]byte(m.Policy.ValueString())) {
+		if !m.Policy.IsUnknown() && m.Policy.ValueString() != "" && !json.Valid([]byte(m.Policy.ValueString())) {
 			resp.Diagnostics.AddError("Invalid bucket policy", "Set `policy` to valid JSON.")
 		}
 	case "tagging":
 		if !m.Tags.IsUnknown() && len(m.Tags.Elements()) == 0 {
 			resp.Diagnostics.AddError("Invalid bucket tags", "Set at least one tag. Remove this resource to delete all bucket tags.")
+		}
+		for key, value := range m.Tags.Elements() {
+			s, ok := value.(types.String)
+			if !ok || s.IsUnknown() {
+				continue
+			}
+			if s.IsNull() {
+				resp.Diagnostics.AddError("Invalid bucket tags", "Tag values cannot be null.")
+				return
+			}
+			if strings.TrimSpace(key) == "" || strings.TrimSpace(s.ValueString()) == "" {
+				resp.Diagnostics.AddError("Invalid bucket tags", "Tag keys and values cannot be empty.")
+				return
+			}
 		}
 	}
 }
@@ -177,11 +262,12 @@ func (r *bucketConfigurationResource) Create(ctx context.Context, req resource.C
 		resp.Diagnostics.AddError("Failed to find bucket", err.Error())
 		return
 	}
-	if err := r.apply(ctx, &m, name); err != nil {
+	if err := withBucketConfigurationWrite(ctx, m.ObjectStorage.ValueString(), m.Bucket.ValueString(), func() error { return r.apply(ctx, &m, name) }); err != nil {
 		resp.Diagnostics.AddError("Failed to configure bucket", err.Error())
 		return
 	}
 	m.ID = types.StringValue(m.ObjectStorage.ValueString() + "/" + m.Bucket.ValueString())
+	r.clearUnused(&m)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
@@ -222,12 +308,37 @@ func (r *bucketConfigurationResource) Update(ctx context.Context, req resource.U
 		resp.Diagnostics.AddError("Failed to find bucket", err.Error())
 		return
 	}
-	if err := r.apply(ctx, &m, name); err != nil {
+	if err := withBucketConfigurationWrite(ctx, m.ObjectStorage.ValueString(), m.Bucket.ValueString(), func() error { return r.apply(ctx, &m, name) }); err != nil {
 		resp.Diagnostics.AddError("Failed to configure bucket", err.Error())
 		return
 	}
 	m.ID = types.StringValue(m.ObjectStorage.ValueString() + "/" + m.Bucket.ValueString())
+	r.clearUnused(&m)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+func (r *bucketConfigurationResource) clearUnused(m *bucketConfigurationModel) {
+	if r.kind != "versioning" {
+		m.Enabled = types.BoolNull()
+	}
+	if r.kind != "policy" {
+		m.Policy = types.StringNull()
+	}
+	if r.kind != "tagging" {
+		m.Tags = types.MapNull(types.StringType)
+	}
+	if r.kind != "lifecycle" {
+		m.Prefix = types.StringNull()
+		m.Days = types.Int64Null()
+		m.NoncurrentDays = types.Int64Null()
+		m.AbortMultipartDays = types.Int64Null()
+	}
+	if r.kind != "cors" {
+		m.AllowedOrigins = types.ListNull(types.StringType)
+		m.AllowedMethods = types.ListNull(types.StringType)
+		m.AllowedHeaders = types.ListNull(types.StringType)
+		m.MaxAgeSeconds = types.Int64Null()
+	}
 }
 
 func (r *bucketConfigurationResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -248,19 +359,21 @@ func (r *bucketConfigurationResource) Delete(ctx context.Context, req resource.D
 		resp.Diagnostics.AddError("Failed to find bucket", err.Error())
 		return
 	}
-	var deleteErr error
-	switch r.kind {
-	case "versioning":
-		deleteErr = r.svc.SetBucketVersioning(ctx, m.ObjectStorage.ValueString(), name, false)
-	case "policy":
-		deleteErr = r.svc.PutBucketPolicy(ctx, m.ObjectStorage.ValueString(), name, "")
-	case "tagging":
-		deleteErr = r.svc.DeleteBucketTagging(ctx, m.ObjectStorage.ValueString(), name)
-	case "lifecycle":
-		deleteErr = r.svc.DeleteBucketLifecycle(ctx, m.ObjectStorage.ValueString(), name)
-	case "cors":
-		deleteErr = r.svc.DeleteBucketCORS(ctx, m.ObjectStorage.ValueString(), name)
-	}
+	deleteErr := withBucketConfigurationWrite(ctx, m.ObjectStorage.ValueString(), m.Bucket.ValueString(), func() error {
+		switch r.kind {
+		case "versioning":
+			return r.svc.SetBucketVersioning(ctx, m.ObjectStorage.ValueString(), name, false)
+		case "policy":
+			return r.svc.PutBucketPolicy(ctx, m.ObjectStorage.ValueString(), name, "")
+		case "tagging":
+			return r.svc.DeleteBucketTagging(ctx, m.ObjectStorage.ValueString(), name)
+		case "lifecycle":
+			return r.svc.DeleteBucketLifecycle(ctx, m.ObjectStorage.ValueString(), name)
+		case "cors":
+			return r.svc.DeleteBucketCORS(ctx, m.ObjectStorage.ValueString(), name)
+		}
+		return nil
+	})
 	if deleteErr != nil {
 		resp.Diagnostics.AddError("Failed to remove bucket configuration", deleteErr.Error())
 	}
@@ -374,6 +487,7 @@ func decodeLifecycle(raw string, m *bucketConfigurationModel) error {
 	}
 	var cfg struct {
 		Rules []struct {
+			Status string `json:"Status"`
 			Filter struct {
 				Prefix string `json:"Prefix"`
 			} `json:"Filter"`
@@ -394,7 +508,17 @@ func decodeLifecycle(raw string, m *bucketConfigurationModel) error {
 	if len(cfg.Rules) == 0 {
 		return nil
 	}
+	if len(cfg.Rules) != 1 {
+		return fmt.Errorf("bucket lifecycle has %d rules; this resource manages exactly one", len(cfg.Rules))
+	}
 	rule := cfg.Rules[0]
+	if !strings.EqualFold(rule.Status, "Enabled") {
+		m.Prefix = types.StringNull()
+		m.Days = types.Int64Null()
+		m.NoncurrentDays = types.Int64Null()
+		m.AbortMultipartDays = types.Int64Null()
+		return nil
+	}
 	m.Prefix = types.StringValue(rule.Filter.Prefix)
 	if rule.Expiration != nil {
 		m.Days = types.Int64Value(rule.Expiration.Days)
@@ -433,6 +557,9 @@ func decodeCORS(ctx context.Context, raw string, m *bucketConfigurationModel) er
 	}
 	if len(rules) == 0 {
 		return nil
+	}
+	if len(rules) != 1 {
+		return fmt.Errorf("bucket CORS has %d rules; this resource manages exactly one", len(rules))
 	}
 	rule := rules[0]
 	origins, d := types.ListValueFrom(ctx, types.StringType, rule.AllowedOrigin)

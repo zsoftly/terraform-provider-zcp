@@ -148,9 +148,13 @@ func (r *objectStorageBucketResource) Read(ctx context.Context, req resource.Rea
 		return
 	}
 
-	model.Name = types.StringValue(bucket.Name)
+	if model.Name.IsNull() || model.Name.IsUnknown() {
+		model.Name = types.StringValue(bucket.Name)
+	}
 	if bucket.Status != "" {
 		model.Status = types.StringValue(bucket.Status)
+	} else {
+		model.Status = types.StringNull()
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
