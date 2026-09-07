@@ -9,9 +9,8 @@ description: |-
 Looks up an existing block storage volume by slug, for example to find the slug
 of an instance's root volume for `zcp_volume_backup` without hardcoding it.
 
-The underlying list API returns a single page of results. On an account with
-more volumes than fit on one page, scope the lookup with `region` and `project`
-so the volume you are looking for is on that page.
+The volume lookup retrieves every page of block storage results. `region` and
+`project` narrow the lookup. Results are complete within that scope.
 
 ## Example Usage
 

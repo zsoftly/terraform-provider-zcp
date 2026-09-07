@@ -13,7 +13,7 @@ instance with `zcp_ip_association`, then open ports with `zcp_firewall_rule` or
 
 ~> **VPC allocation requires an existing network:** the API refuses to allocate
 a public IP into a VPC until the VPC has at least one network (tier). It fails
-with a 403 error stating there are no networks in the VPC. The `vpc` slug alone
+with a 422 error stating there are no networks in the VPC. The `vpc` slug alone
 gives Terraform no ordering information between the tier and the IP address. Add
 an explicit `depends_on` on the tier, as shown in the VPC example below.
 

@@ -5,7 +5,7 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [v0.1.4] - 2026-09-07
 
 ### Added
 
@@ -44,8 +44,9 @@ to [Semantic Versioning](https://semver.org/).
   `volume_type`, `instance_id`, and `created_at` (relates to
   zsoftly/zcp-cli#59).
 - **`data.zcp_instance` exposes `root_volume` and `volumes`.** `root_volume` is
-  the slug of the instance's root disk and `volumes` lists the slugs of every
-  volume attached to it, root first. Point `zcp_volume_backup` at
+  the slug of the instance's root disk and `volumes` lists the slugs of attached
+  volumes, root first. The lookup retrieves every result page within the
+  configured region and project scope. Point `zcp_volume_backup` at
   `data.zcp_instance.web.root_volume` instead of hardcoding a volume slug that
   changes every time the instance is rebuilt. `data.zcp_instance` also gained
   optional `region` and `project` inputs to scope this lookup, and `public_ip`
@@ -54,6 +55,10 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
+- **Upgraded the zcp-cli SDK from v0.0.28 to v0.0.29.** Volume listings now
+  retrieve every API page, so `data.zcp_volume` lookups and the volume
+  collection behind `data.zcp_instance.root_volume` and `.volumes` no longer
+  miss results beyond the first page within their configured scope.
 - **Upgraded the zcp-cli SDK from v0.0.26 to v0.0.28.** The Go toolchain moves
   from 1.26.6 to 1.26.8. The `go` directive moves to 1.26.0 because the SDK
   requires it.
@@ -82,10 +87,10 @@ to [Semantic Versioning](https://semver.org/).
   billing service-cancellation endpoint, the same workflow the CMP web UI uses,
   and waits for the schedule to disappear from the list. A slug that no longer
   exists is treated as already deleted (fixes zsoftly/zcp-cli#58). Destroy also
-  tolerates a transient error from the list call while waiting for the schedule
-  to disappear: a single failed poll no longer aborts the destroy, which now
-  keeps polling until the deadline and only surfaces the last error if the
-  schedule never disappears.
+  retries recognized transient list errors while waiting for the schedule to
+  disappear. A permanent error stops the destroy immediately. If the schedule
+  does not disappear before the deadline, the provider surfaces the last
+  transient error.
 - **`interval` is validated on `zcp_vm_backup` and `zcp_volume_backup`, and the
   docs are corrected.** The API accepts only `dailyAt` and `hourlyAt` and
   rejects `daily`, `weekly`, `monthly`, and `hourly`. The docs previously showed
@@ -102,11 +107,11 @@ to [Semantic Versioning](https://semver.org/).
   (fixes #16).
 - **`zcp_ip_address` now explains the VPC-without-a-network ordering problem.**
   Allocating a public IP into a VPC that has no network tier fails on the API
-  with a 403 error. The provider now returns a clear error naming the fix:
+  with a 422 error. The provider now returns a clear error naming the fix:
   create the tier first and add `depends_on` on it. Docs show the pattern
   (relates to #14).
 - **`zcp_network_acl` documentation corrected from stateless to stateful.**
-  CloudStack ACLs track connections and accept replies to allowed traffic
+  Platform ACLs track connections and accept replies to allowed traffic
   automatically. Ingress and egress rules do not correlate. Inbound listeners
   still need explicit ingress rules (fixes #13).
 

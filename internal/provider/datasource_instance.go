@@ -181,10 +181,8 @@ func (d *instanceDataSource) Read(ctx context.Context, req datasource.ReadReques
 // of the ROOT volume attached to vmID (empty if none) plus the slugs of all
 // attached volumes, root first.
 //
-// volume.Service.List fetches a single page; the SDK has no page parameter
-// yet. On an account with more volumes than fit on one API page, scope the
-// lookup with region and project to keep this instance's volumes on that
-// page.
+// The released zcp-cli v0.0.29 volume.Service.List retrieves every result page
+// within the requested region and project scope.
 func (d *instanceDataSource) attachedVolumes(ctx context.Context, region, project, vmID string) (string, []string, error) {
 	volumes, err := d.volSvc.List(ctx, region, project)
 	if err != nil {

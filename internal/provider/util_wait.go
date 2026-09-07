@@ -2,7 +2,12 @@ package provider
 
 import (
 	"context"
+	"errors"
+	"net/http"
+	"strings"
 	"time"
+
+	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 )
 
 // pollUntilGone calls exists every interval until it returns false (resource is confirmed gone)
@@ -14,19 +19,26 @@ import (
 // exists must return:
 //   - (true,  nil) — resource still exists; keep polling
 //   - (false, nil) — resource is confirmed gone; done
-//   - (_,    err)  — a list (or similar) call failed; treated as transient
+//   - (_,    err)  — recognized not-found errors are treated as gone; known
+//     transient API errors are retried; all other errors stop the poll
 //
-// A single failed call does not abort the poll: many callers have already
+// A transient list error does not abort the poll: many callers have already
 // issued a delete/cancel request by the time they start polling, so aborting
-// on the next transient list error would report a destroy as failed when it
-// actually succeeded. Instead, an error keeps the poll going until ctx's
-// deadline, and only the last error is surfaced if the resource never
-// resolves to gone.
+// on the next transient error would report a destroy as failed when it
+// actually succeeded. The last transient error is surfaced only if the
+// resource does not resolve to gone before ctx's deadline.
 func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx context.Context) (bool, error)) error {
 	var lastErr error
 	for {
 		found, err := exists(ctx)
 		if err != nil {
+			gone, transient := classifyPollUntilGoneError(err)
+			if gone {
+				return nil
+			}
+			if !transient {
+				return err
+			}
 			lastErr = err
 		} else {
 			lastErr = nil
@@ -46,6 +58,38 @@ func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx 
 			return ctx.Err()
 		case <-t.C:
 		}
+	}
+}
+
+// classifyPollUntilGoneError identifies API responses that are safe to handle
+// while waiting for deletion. Callers translate package-specific not-found
+// sentinels to (false, nil) before invoking pollUntilGone.
+func classifyPollUntilGoneError(err error) (gone, transient bool) {
+	var apiErr *apierrors.APIError
+	if !errors.As(err, &apiErr) {
+		return false, false
+	}
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		return true, false
+	}
+	// The backend returns this documented message with HTTP 500 after a
+	// successful delete. Do not apply the legacy text workaround to other
+	// statuses or unstructured errors.
+	if apiErr.StatusCode == http.StatusInternalServerError &&
+		strings.Contains(strings.ToLower(apiErr.Message), "no query results for model") {
+		return true, false
+	}
+	if apierrors.IsTransientRoutingError(err) {
+		return false, true
+	}
+
+	switch {
+	case apiErr.StatusCode == http.StatusRequestTimeout,
+		apiErr.StatusCode == http.StatusTooManyRequests,
+		apiErr.StatusCode >= http.StatusInternalServerError && apiErr.StatusCode < 600:
+		return false, true
+	default:
+		return false, false
 	}
 }
 

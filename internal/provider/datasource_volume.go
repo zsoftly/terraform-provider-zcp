@@ -114,9 +114,8 @@ func (d *volumeDataSource) Read(ctx context.Context, req datasource.ReadRequest,
 		project = state.Project.ValueString()
 	}
 
-	// volume.Service.List fetches a single page; the SDK has no page parameter
-	// yet. On an account with more volumes than fit on one API page, scope the
-	// lookup with region and project to keep the target volume on that page.
+	// The released zcp-cli v0.0.29 volume.Service.List retrieves every result
+	// page within the requested region and project scope.
 	volumes, err := d.svc.List(ctx, region, project)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to list volumes", err.Error())

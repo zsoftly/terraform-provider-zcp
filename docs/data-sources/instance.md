@@ -9,9 +9,9 @@ description: |-
 Looks up an existing instance by slug, for example to attach resources to an
 instance created outside Terraform.
 
-The attached-volume lookup behind `root_volume` and `volumes` returns a single
-page of results. On an account with more volumes than fit on one page, scope the
-lookup with `region` and `project` so this instance's volumes are on that page.
+The attached-volume lookup behind `root_volume` and `volumes` retrieves every
+page of block storage results. `region` and `project` narrow the lookup. Results
+are complete within that scope.
 
 ## Example Usage
 

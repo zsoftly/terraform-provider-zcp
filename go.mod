@@ -11,7 +11,7 @@ require (
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-log v0.10.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
-	github.com/zsoftly/zcp-cli v0.0.28
+	github.com/zsoftly/zcp-cli v0.0.29
 )
 
 require (

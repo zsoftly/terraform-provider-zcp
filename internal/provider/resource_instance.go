@@ -288,7 +288,7 @@ func (r *instanceResource) Configure(_ context.Context, req resource.ConfigureRe
 	r.defaultProject = pd.DefaultProject
 }
 
-// isRunning reports whether a CloudStack VM state string means the VM is running.
+// isRunning reports whether a platform VM state string means the VM is running.
 func isRunning(state string) bool {
 	return strings.EqualFold(state, "running")
 }
@@ -772,11 +772,11 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// 3. Plan / billing cycle (resize) — Terraform does not manage power state, but
-	//    changing a CloudStack compute offering requires the VM to be stopped, so
-	//    the provider transparently stops it (only if it was running), changes the
-	//    offering, and restarts it back to its prior state. This is the only place
-	//    power is touched, and it mirrors how aws_instance handles instance_type.
+	// 3. Plan / billing cycle (resize). Terraform does not manage power state.
+	//    Changing a compute offering requires a stopped VM, so the provider stops
+	//    a running VM, changes the offering, and restores its prior state. This is
+	//    the only place power is touched, and it mirrors how aws_instance handles
+	//    instance_type.
 	if !plan.Plan.Equal(state.Plan) || !plan.BillingCycle.Equal(state.BillingCycle) {
 		if err := r.resize(ctx, slug, plan); err != nil {
 			resp.Diagnostics.AddError("Failed to resize instance", err.Error())
@@ -936,12 +936,10 @@ func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug st
 	}
 }
 
-// resize changes the instance's compute offering. Because CloudStack requires a
-// stopped VM to change its offering, it stops the VM first if it is running and
-// restarts it afterward, leaving it in the same power state it started in. If the
-// offering change fails after the VM was stopped, the VM is restarted (when it
-// was running) before the error is returned, preserving the transparent-resize
-// contract that a failed resize does not leave a previously-running VM stopped.
+// resize changes the instance's compute offering. The platform requires a
+// stopped VM for this operation. The provider restores the VM to its original
+// power state after the change or after a failed change, so a failed resize does
+// not leave a previously running VM stopped.
 func (r *instanceResource) resize(ctx context.Context, slug string, plan instanceResourceModel) error {
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
