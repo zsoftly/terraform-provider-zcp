@@ -174,6 +174,7 @@ func (p *ZCPProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		NewSSHKeyDataSource,
 		NewKubernetesVersionDataSource,
 		NewInstanceDataSource,
+		NewVolumeDataSource,
 		NewPermissionsDataSource,
 	}
 }

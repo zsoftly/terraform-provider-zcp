@@ -10,6 +10,14 @@ Manages an ingress firewall rule on a ZCP public IP address. The API has no
 update endpoint for firewall rules, so every change forces replacement. For
 outbound rules on a network use `zcp_egress_rule`.
 
+~> **Not supported on VPC public IPs:** the API accepts a firewall rule create
+request on a public IP that belongs to a VPC, but never applies it. The provider
+checks the account IP list before create and fails fast with an error when it
+can see from that list that the IP belongs to a VPC. The check is best effort:
+if the IP cannot be found in that list, or the list call itself fails, create
+proceeds and can still time out. Control ingress for a VPC tier with
+`zcp_network_acl` and `zcp_network_acl_rule` instead.
+
 ## Example Usage
 
 ```terraform

@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	rschema "github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -177,6 +181,10 @@ type instanceStateModel struct {
 	SSHKey          types.String   `tfsdk:"ssh_key"`
 	Network         types.String   `tfsdk:"network"`
 	NetworkPlan     types.String   `tfsdk:"network_plan"`
+	NetworkType     types.String   `tfsdk:"network_type"`
+	VrPlan          types.String   `tfsdk:"vr_plan"`
+	Networks        types.List     `tfsdk:"networks"`
+	DefaultNetwork  types.String   `tfsdk:"default_network"`
 	AssignPublicIP  types.Bool     `tfsdk:"assign_public_ip"`
 	StorageCategory types.String   `tfsdk:"storage_category"`
 	UserData        types.String   `tfsdk:"user_data"`
@@ -222,6 +230,10 @@ func instanceValues(t *testing.T, id string) map[string]tftypes.Value {
 		"ssh_key":          null(),
 		"network":          null(),
 		"network_plan":     null(),
+		"network_type":     tftypes.NewValue(tftypes.String, "Isolated"),
+		"vr_plan":          null(),
+		"networks":         tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
+		"default_network":  null(),
 		"assign_public_ip": tftypes.NewValue(tftypes.Bool, nil),
 		"storage_category": null(),
 		"user_data":        null(),
@@ -318,6 +330,39 @@ func TestInstanceResource_createReadyViaLiveMeta(t *testing.T) {
 	}
 }
 
+// TestInstanceResource_createPublicIPPrefersIPAddressesEntry verifies that the
+// `ipaddresses` entry marked `ip_type == "Public IP"` is used even when the
+// VM's top-level public_ip field also carries a (different, stale) value, and
+// that it is used even when the top-level field is null, matching the
+// platform's actual behavior (the top-level field is null even when a public
+// IP is attached).
+func TestInstanceResource_createPublicIPPrefersIPAddressesEntry(t *testing.T) {
+	fromList := "203.0.113.10"
+	fromTopLevel := "203.0.113.99"
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got: &instance.VirtualMachine{
+			Slug:     "vm1-abc",
+			State:    "Running",
+			PublicIP: &fromTopLevel,
+			IPAddresses: []instance.IPAddresses{
+				{IPAddress: fromList, Type: "IPv4", IPType: "Public IP"},
+			},
+		},
+	}
+	resp := createInstance(t, svc)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.PublicIP.ValueString() != fromList {
+		t.Errorf("PublicIP = %q, want %q (the ipaddresses entry, preferred over the top-level field)", got.PublicIP.ValueString(), fromList)
+	}
+}
+
 // TestInstanceResource_createFailsViaActivityLog verifies a FAILED VM.CREATE log
 // errors out (fast) regardless of the state field.
 func TestInstanceResource_createFailsViaActivityLog(t *testing.T) {
@@ -398,6 +443,369 @@ func TestInstanceResource_validateNetworkConflict(t *testing.T) {
 	r.ValidateConfig(context.Background(), req, &resp)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error when both network and network_plan are set")
+	}
+}
+
+// networksVal builds a tftypes list value for `networks` (null when vals is nil).
+func networksVal(vals []string) tftypes.Value {
+	lt := tftypes.List{ElementType: tftypes.String}
+	if vals == nil {
+		return tftypes.NewValue(lt, nil)
+	}
+	elems := make([]tftypes.Value, len(vals))
+	for i, v := range vals {
+		elems[i] = tftypes.NewValue(tftypes.String, v)
+	}
+	return tftypes.NewValue(lt, elems)
+}
+
+// networksValUnknown builds a known `networks` list of the given length with
+// every element unknown, simulating `networks = [zcp_network.a.id, ...]`
+// referencing resources not yet created.
+func networksValUnknown(n int) tftypes.Value {
+	lt := tftypes.List{ElementType: tftypes.String}
+	elems := make([]tftypes.Value, n)
+	for i := range elems {
+		elems[i] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	}
+	return tftypes.NewValue(lt, elems)
+}
+
+// TestInstanceResource_createDefaultsNetworkTypeIsolated verifies that, absent
+// `network_type`, the create request defaults to NetworkType: "Isolated" and
+// carries the single `network` as the sole entry in Networks.
+func TestInstanceResource_createDefaultsNetworkTypeIsolated(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createReq.NetworkType != "Isolated" {
+		t.Errorf("NetworkType = %q, want Isolated", svc.createReq.NetworkType)
+	}
+	if len(svc.createReq.Networks) != 1 || svc.createReq.Networks[0] != "app-net" {
+		t.Errorf("Networks = %v, want [app-net]", svc.createReq.Networks)
+	}
+}
+
+// TestInstanceResource_createVpcSendsVrPlan verifies that network_type = "Vpc"
+// with vr_plan sends VrPlan and does NOT send NetworkPlan.
+func TestInstanceResource_createVpcSendsVrPlan(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "Vpc")
+	vals["vr_plan"] = tftypes.NewValue(tftypes.String, "vr-basic")
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createReq.NetworkType != "Vpc" {
+		t.Errorf("NetworkType = %q, want Vpc", svc.createReq.NetworkType)
+	}
+	if svc.createReq.VrPlan != "vr-basic" {
+		t.Errorf("VrPlan = %q, want vr-basic", svc.createReq.VrPlan)
+	}
+	if svc.createReq.NetworkPlan != "" {
+		t.Errorf("NetworkPlan = %q, want empty for network_type=Vpc", svc.createReq.NetworkPlan)
+	}
+}
+
+// TestInstanceResource_validateVpcRejectsNetworkPlan verifies network_type =
+// "Vpc" combined with network_plan is rejected at plan time.
+func TestInstanceResource_validateVpcRejectsNetworkPlan(t *testing.T) {
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithValidateConfig)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "Vpc")
+	vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when network_plan is set with network_type=Vpc")
+	}
+}
+
+// TestInstanceResource_validateMultipleNetworksRequireDefault verifies that
+// more than one entry in `networks` without `default_network` is rejected.
+func TestInstanceResource_validateMultipleNetworksRequireDefault(t *testing.T) {
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithValidateConfig)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["networks"] = networksVal([]string{"net-a", "net-b"})
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when networks has more than one entry without default_network")
+	}
+}
+
+// TestInstanceResource_validateDefaultNetworkNotInNetworks verifies that a
+// `default_network` value absent from `networks` is rejected.
+func TestInstanceResource_validateDefaultNetworkNotInNetworks(t *testing.T) {
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithValidateConfig)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["networks"] = networksVal([]string{"net-a", "net-b"})
+	vals["default_network"] = tftypes.NewValue(tftypes.String, "net-c")
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when default_network is not one of networks")
+	}
+}
+
+// validateInstanceConfig runs ValidateConfig against vals overlaid on a base
+// valid config and returns the diagnostics.
+func validateInstanceConfig(t *testing.T, vals map[string]tftypes.Value) resource.ValidateConfigResponse {
+	t.Helper()
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithValidateConfig)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	return resp
+}
+
+// TestInstanceResource_validateSkipsUnknownNetworksElements verifies that
+// `networks` with unknown elements (e.g. `networks =
+// [zcp_network.a.id, zcp_network.b.id]` before those resources are created)
+// does not raise a value-conversion error and does not report a missing
+// default_network, since the element-dependent checks cannot run yet.
+func TestInstanceResource_validateSkipsUnknownNetworksElements(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["networks"] = networksValUnknown(2)
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for networks with unknown elements: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_validateAcceptsUnknownDefaultNetwork verifies that an
+// unknown `default_network` (e.g. `default_network = zcp_network.a.id` before
+// apply) satisfies the "required when networks has more than one entry" check
+// (presence only needs !IsNull) and skips the membership check (which needs the
+// resolved value).
+func TestInstanceResource_validateAcceptsUnknownDefaultNetwork(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["networks"] = networksVal([]string{"net-a", "net-b"})
+	vals["default_network"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for an unknown default_network: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_validateEmptyNetworksTreatedAsUnset verifies that an
+// explicit `networks = []` does not satisfy the "one network source is
+// required" check; it is treated the same as omitting `networks` entirely.
+func TestInstanceResource_validateEmptyNetworksTreatedAsUnset(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["networks"] = networksVal([]string{})
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error: an empty networks list must not satisfy the required-network-source check")
+	}
+}
+
+// TestInstanceResource_validateAcceptsUnknownNetwork verifies that an unknown
+// `network` (e.g. `network = zcp_network.app.id` before that resource is
+// created, exactly the shape of the repo's own example) does not trigger the
+// "missing network configuration" error: an unknown scalar might still resolve
+// to a value, so it must not be treated as absent.
+func TestInstanceResource_validateAcceptsUnknownNetwork(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for an unknown network: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_validateAcceptsUnknownVrPlan verifies that, for
+// network_type = "Vpc", an unknown `vr_plan` (e.g. `vr_plan =
+// some_resource.attr` before apply) satisfies the required-one-of check the
+// same way an unknown `network` does for Isolated/L2.
+func TestInstanceResource_validateAcceptsUnknownVrPlan(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "Vpc")
+	vals["vr_plan"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for an unknown vr_plan: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_validateL2RejectsAssignPublicIPTrue verifies that
+// network_type = "L2" with assign_public_ip = true is rejected, mirroring the
+// CLI's "--is-public cannot be true for 'L2' networks".
+func TestInstanceResource_validateL2RejectsAssignPublicIPTrue(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "L2")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["assign_public_ip"] = tftypes.NewValue(tftypes.Bool, true)
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error for network_type=L2 with assign_public_ip=true")
+	}
+}
+
+// TestInstanceResource_validateL2RejectsAssignPublicIPOmitted verifies that
+// network_type = "L2" with assign_public_ip omitted is also rejected, since
+// assign_public_ip defaults to true.
+func TestInstanceResource_validateL2RejectsAssignPublicIPOmitted(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "L2")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error for network_type=L2 with assign_public_ip omitted (defaults to true)")
+	}
+}
+
+// TestInstanceResource_validateL2AcceptsAssignPublicIPFalse verifies that
+// network_type = "L2" with assign_public_ip = false is accepted.
+func TestInstanceResource_validateL2AcceptsAssignPublicIPFalse(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "L2")
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	vals["assign_public_ip"] = tftypes.NewValue(tftypes.Bool, false)
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for network_type=L2 with assign_public_ip=false: %v", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_validateVpcNetworkPlanMessageWins verifies that, with
+// network_type = "Vpc" and network_plan set (no vr_plan or networks), the
+// reported error is the actionable "network_plan is not allowed" message, not
+// the more generic "missing network configuration" message that would also be
+// technically true. Mirrors the CLI's fail-fast validation order.
+func TestInstanceResource_validateVpcNetworkPlanMessageWins(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network_type"] = tftypes.NewValue(tftypes.String, "Vpc")
+	vals["network_plan"] = tftypes.NewValue(tftypes.String, "pnet-yow")
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.ErrorsCount() != 1 {
+		t.Fatalf("ErrorsCount = %d, want 1: %v", resp.Diagnostics.ErrorsCount(), resp.Diagnostics)
+	}
+	got := resp.Diagnostics[0].Detail()
+	if !strings.Contains(got, "network_plan") || !strings.Contains(got, "not allowed") {
+		t.Errorf("error = %q, want the network_plan-not-allowed message", got)
+	}
+}
+
+// TestInstanceResource_validateDefaultNetworkAgainstSingleNetwork verifies that
+// `default_network` is checked against the single `network` attribute (not just
+// against `networks`), so network = "a" + default_network = "z" is rejected.
+func TestInstanceResource_validateDefaultNetworkAgainstSingleNetwork(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["network"] = tftypes.NewValue(tftypes.String, "a")
+	vals["default_network"] = tftypes.NewValue(tftypes.String, "z")
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when default_network does not match the single network")
+	}
+}
+
+// TestInstanceResource_createSendsDefaultNetwork verifies that a valid
+// `default_network` (one of `networks`) is sent in the create request.
+func TestInstanceResource_createSendsDefaultNetwork(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["networks"] = networksVal([]string{"net-a", "net-b"})
+	vals["default_network"] = tftypes.NewValue(tftypes.String, "net-b")
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createReq.DefaultNetwork != "net-b" {
+		t.Errorf("DefaultNetwork = %q, want net-b", svc.createReq.DefaultNetwork)
+	}
+	if len(svc.createReq.Networks) != 2 || svc.createReq.Networks[0] != "net-a" || svc.createReq.Networks[1] != "net-b" {
+		t.Errorf("Networks = %v, want [net-a net-b]", svc.createReq.Networks)
+	}
+}
+
+// TestInstanceResource_networkTypeNoReplaceOnUpgrade verifies that a state with
+// a null network_type (as left by a provider version predating this attribute)
+// plans no replacement when the config omits it too. This exercises the
+// network_type attribute's own plan modifiers directly, the same inputs
+// fwserver would pass for an update: a non-null prior resource state, a
+// non-null plan (not a destroy), and both the state and plan values for this
+// attribute null. Before the fix, network_type was Optional+Computed with a
+// Default, so the framework defaulted the null plan value to "Isolated" ahead
+// of RequiresReplace, which then saw plan "Isolated" != state null and forced
+// every pre-existing instance to replace on the first plan after upgrade.
+func TestInstanceResource_networkTypeNoReplaceOnUpgrade(t *testing.T) {
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+
+	stateVals := instanceValues(t, "vm1-abc")
+	stateVals["network_type"] = tftypes.NewValue(tftypes.String, nil)
+	planVals := instanceValues(t, "vm1-abc")
+	planVals["network_type"] = tftypes.NewValue(tftypes.String, nil)
+
+	attribute, ok := schResp.Schema.Attributes["network_type"].(rschema.StringAttribute)
+	if !ok {
+		t.Fatal("network_type is not a schema.StringAttribute")
+	}
+	if attribute.Computed {
+		t.Error("network_type is Computed, want plain Optional so an omitted value is never written to state")
+	}
+	if attribute.Default != nil {
+		t.Error("network_type has a Default, want none so upgraded state with a null value is never treated as a value change")
+	}
+
+	req := planmodifier.StringRequest{
+		Path:        path.Root("network_type"),
+		State:       tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateVals)},
+		Plan:        tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, planVals)},
+		ConfigValue: types.StringNull(),
+		StateValue:  types.StringNull(),
+		PlanValue:   types.StringNull(),
+	}
+	planResp := planmodifier.StringResponse{PlanValue: req.PlanValue}
+	for _, m := range attribute.PlanModifiers {
+		m.PlanModifyString(context.Background(), req, &planResp)
+	}
+	if planResp.RequiresReplace {
+		t.Error("network_type plan modifiers set RequiresReplace for a null state / null plan, want no replacement (upgrade safety)")
+	}
+	if !planResp.PlanValue.IsNull() {
+		t.Errorf("PlanValue = %#v, want null (omitting network_type must not resolve to a value at plan time)", planResp.PlanValue)
 	}
 }
 
@@ -684,6 +1092,65 @@ func TestInstanceResource_delete404IsNoOp(t *testing.T) {
 	resp := deleteInstance(t, svc, "gone")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("404 delete should be a no-op: %v", resp.Diagnostics)
+	}
+}
+
+// importInstance runs ImportState with the given import ID against a fresh,
+// all-null base state.
+func importInstance(t *testing.T, id string) resource.ImportStateResponse {
+	t.Helper()
+	r := internalprovider.NewInstanceResource().(resource.ResourceWithImportState)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	importReq := resource.ImportStateRequest{ID: id}
+	importResp := &resource.ImportStateResponse{
+		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, instanceValues(t, ""))},
+	}
+	r.ImportState(context.Background(), importReq, importResp)
+	return *importResp
+}
+
+// TestInstanceResource_importTooManySegmentsErrors verifies that an import ID
+// with more segments than the documented format (one more than the 14
+// positional fields plus the trailing networks segment) is rejected with the
+// "Invalid import ID" error instead of the extra segments silently collapsing
+// into the networks value.
+func TestInstanceResource_importTooManySegmentsErrors(t *testing.T) {
+	id := "vm1-abc/nimbo/yow-1/ubuntu-24/ci1.small/hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/net-a,net-b/extra"
+	resp := importInstance(t, id)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error for an import ID with more segments than documented")
+	}
+	found := false
+	for _, d := range resp.Diagnostics {
+		if strings.Contains(d.Summary(), "Invalid import ID") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("diagnostics = %v, want an Invalid import ID error", resp.Diagnostics)
+	}
+}
+
+// TestInstanceResource_importNetworksSegment verifies that the documented
+// number of segments (14 fields plus the trailing comma-separated networks
+// segment) sets the networks attribute and does not error.
+func TestInstanceResource_importNetworksSegment(t *testing.T) {
+	id := "vm1-abc/nimbo/yow-1/ubuntu-24/ci1.small/hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/net-a,net-b"
+	resp := importInstance(t, id)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	var networks []string
+	if diags := got.Networks.ElementsAs(context.Background(), &networks, false); diags.HasError() {
+		t.Fatalf("reading networks: %v", diags)
+	}
+	if len(networks) != 2 || networks[0] != "net-a" || networks[1] != "net-b" {
+		t.Errorf("networks = %v, want [net-a net-b]", networks)
 	}
 }
 

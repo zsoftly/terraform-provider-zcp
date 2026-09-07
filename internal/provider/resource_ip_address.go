@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -173,6 +174,20 @@ func (r *ipAddressResource) Create(ctx context.Context, req resource.CreateReque
 		Project:      project,
 	})
 	if err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "no networks in vpc") {
+			vpcRef := "the VPC"
+			if !model.VPC.IsNull() && model.VPC.ValueString() != "" {
+				vpcRef = fmt.Sprintf("VPC %q", model.VPC.ValueString())
+			}
+			resp.Diagnostics.AddError(
+				"VPC has no network yet",
+				fmt.Sprintf(
+					"The API refuses to allocate a public IP into %s until the VPC has at least one network (tier). Create the tier first, then add `depends_on = [zcp_network.<tier>]` to this zcp_ip_address resource: the vpc slug alone gives Terraform no ordering information between the two resources. Original error: %s",
+					vpcRef, err.Error(),
+				),
+			)
+			return
+		}
 		resp.Diagnostics.AddError("Failed to allocate IP address", err.Error())
 		return
 	}

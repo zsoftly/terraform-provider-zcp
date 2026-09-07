@@ -1,3 +1,7 @@
-data "zcp_instance" "legacy" {
-  slug = "vm1-abc"
+data "zcp_instance" "web" {
+  slug = "vm1-web"
+}
+
+output "root_volume" {
+  value = data.zcp_instance.web.root_volume
 }

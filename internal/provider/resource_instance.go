@@ -3,14 +3,18 @@ package provider
 import (
 	"context"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -120,6 +124,10 @@ type instanceResourceModel struct {
 	SSHKey          types.String `tfsdk:"ssh_key"`
 	Network         types.String `tfsdk:"network"`
 	NetworkPlan     types.String `tfsdk:"network_plan"`
+	NetworkType     types.String `tfsdk:"network_type"`
+	VrPlan          types.String `tfsdk:"vr_plan"`
+	Networks        types.List   `tfsdk:"networks"`
+	DefaultNetwork  types.String `tfsdk:"default_network"`
 	AssignPublicIP  types.Bool   `tfsdk:"assign_public_ip"`
 	StorageCategory types.String `tfsdk:"storage_category"`
 	UserData        types.String `tfsdk:"user_data"`
@@ -190,17 +198,38 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"network": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Slug of an existing `zcp_network` to attach the instance to. Mutually exclusive with `network_plan`. Prefer this: the instance attaches to a network you manage, so `terraform destroy` leaves nothing behind. Changing this forces replacement.",
+				MarkdownDescription: "Slug of an existing `zcp_network` to attach the instance to. Mutually exclusive with `network_plan` and with `networks`. Prefer this or `networks`: the instance attaches to a network you manage, so `terraform destroy` leaves nothing behind. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"network_plan": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Network plan slug (e.g. `pnet-yow`) used to auto-create an isolated network for the instance. Mutually exclusive with `network`. Note: the auto-created network is not managed by Terraform and is not removed on destroy — prefer `network` with an explicit `zcp_network`. Run `zcp plan network` to list values. Changing this forces replacement.",
+				MarkdownDescription: "Network plan slug (e.g. `pnet-yow`) used to auto-create an isolated network for the instance. Mutually exclusive with `network` and with `networks`. Not allowed when `network_type` is `Vpc`. Note: the auto-created network is not managed by Terraform and is not removed on destroy. Prefer `network` or `networks` with an explicit `zcp_network`. Run `zcp plan network` to list values. Changing this forces replacement.",
+				PlanModifiers:       requiresReplace,
+			},
+			"network_type": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Network type: `Isolated`, `L2`, or `Vpc`. Treated as `Isolated` when omitted; the value is then not written to state (a plain Optional attribute, not Computed), so upgrading from a provider version that only supported `Isolated` never plans a replacement for existing instances. `Isolated` and `L2` accept `network_plan`, `network`, or `networks`. `Vpc` accepts `vr_plan` or `networks`, but not `network_plan`. `L2` requires `assign_public_ip = false` (the platform rejects a public IP for L2 networks, and `assign_public_ip` defaults to `true`). Changing this forces replacement.",
+				PlanModifiers:       requiresReplace,
+			},
+			"vr_plan": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Virtual router plan slug used when `network_type` is `Vpc`. Not allowed for `Isolated` or `L2`. Changing this forces replacement.",
+				PlanModifiers:       requiresReplace,
+			},
+			"networks": schema.ListAttribute{
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Slugs of existing networks to attach the instance to. Supersedes `network`. Setting both is a conflict. With more than one entry, `default_network` is required and must be one of them. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.List{listplanmodifier.RequiresReplace()},
+			},
+			"default_network": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Slug of the network in `networks` to treat as the instance's default network. Required when `networks` has more than one entry. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"assign_public_ip": schema.BoolAttribute{
 				Optional:            true,
-				MarkdownDescription: "Whether to assign a public IP to the instance. Defaults to `true`. Set to `false` for a private-only instance. Changing this forces replacement.",
+				MarkdownDescription: "Whether to assign a public IP to the instance. Defaults to `true`. Set to `false` for a private-only instance. Must be `false` when `network_type` is `L2`. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.Bool{boolplanmodifier.RequiresReplace()},
 			},
 			"storage_category": schema.StringAttribute{
@@ -322,12 +351,36 @@ func (r *instanceResource) applyVMState(model *instanceResourceModel, vm *instan
 	model.Slug = types.StringValue(vm.Slug)
 	model.State = types.StringValue(vm.State)
 	model.PrivateIP = types.StringValue(vm.NetworkPrivateIP())
-	model.PublicIP = types.StringValue(instance.StringVal(vm.PublicIP))
+	// Prefer the ipaddresses entry the platform marks as the public IP (the
+	// top-level field is null even when a public IP is attached, verified live),
+	// then the top-level field. fillPublicIP still runs afterward for the
+	// source-NAT case where neither is populated.
+	publicIP := vm.GetPublicIPAddress()
+	if publicIP == "" {
+		publicIP = instance.StringVal(vm.PublicIP)
+	}
+	model.PublicIP = types.StringValue(publicIP)
 }
 
-// ValidateConfig enforces that `network` and `network_plan` are not both set:
-// `network` attaches to an existing network, `network_plan` auto-creates one, so
-// they are mutually exclusive.
+// ValidateConfig mirrors the zcp-cli's `instance create` network validation:
+// `network` and `network_plan` are mutually exclusive, `network` and `networks`
+// are mutually exclusive (networks supersedes network), `network_type` must be
+// Isolated, L2, or Vpc, `vr_plan` is only allowed for Vpc, `network_plan` is not
+// allowed for Vpc, `assign_public_ip` cannot be true (or omitted, since it
+// defaults to true) for L2, one of network_plan/network/networks (Isolated/L2)
+// or vr_plan/network/networks (Vpc) is required, and default_network is required
+// with (and must be one of) more than one entry in networks. An empty `networks
+// = []` counts as not set, matching the CLI's post-normalize length check. When a
+// not-allowed attribute is set for the given network_type, that error alone is
+// reported instead of also reporting a redundant missing-source error, mirroring
+// the CLI's fail-fast validation order. Checks that depend on a value known only
+// after apply are skipped: an unknown network_type, an unknown default_network,
+// an unknown `networks` element, an unknown whole `networks` list, and an
+// unknown `network`/`network_plan`/`vr_plan` scalar (each of the latter three
+// counts toward satisfying the required-one-of-network-sources check instead of
+// counting as absent, since terraform plan/validate commonly runs with these
+// still unresolved, e.g. `network = zcp_network.app.id` before that resource is
+// created).
 func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var model instanceResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
@@ -335,12 +388,160 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 		return
 	}
 	networkSet := !model.Network.IsNull() && !model.Network.IsUnknown()
+	networksKnown := !model.Networks.IsNull() && !model.Networks.IsUnknown()
 	planSet := !model.NetworkPlan.IsNull() && !model.NetworkPlan.IsUnknown()
+	vrPlanSet := !model.VrPlan.IsNull() && !model.VrPlan.IsUnknown()
+	// Absence, unlike *Set above, requires the value to be explicitly null: an
+	// unknown scalar (e.g. network = zcp_network.app.id before that resource is
+	// created) might still resolve to a value, so it must not be treated as
+	// "definitely missing" for the required-one-of-network-sources check below.
+	// Otherwise `terraform validate`/`plan` on an entirely ordinary config with
+	// an as-yet-uncreated network dependency fails with a false "missing network
+	// configuration" error.
+	networkAbsent := model.Network.IsNull()
+	planAbsent := model.NetworkPlan.IsNull()
+	vrPlanAbsent := model.VrPlan.IsNull()
+	// Presence only requires the value to be set in config, even if it resolves
+	// later (e.g. default_network = zcp_network.a.id before apply); only the
+	// membership check below needs the value itself.
+	defaultNetworkPresent := !model.DefaultNetwork.IsNull()
+	defaultNetworkKnown := defaultNetworkPresent && !model.DefaultNetwork.IsUnknown()
+
+	// The list's length is known as soon as the list itself is known, even if
+	// individual elements are not (e.g. networks = [zcp_network.a.id] before
+	// apply), so an empty `networks = []` can be told apart from a populated list
+	// without calling ElementsAs (which errors on an unknown element).
+	var networksElements []attr.Value
+	if networksKnown {
+		networksElements = model.Networks.Elements()
+	}
+	networksProvided := len(networksElements) > 0
+	networksElementsKnown := true
+	for _, e := range networksElements {
+		if e.IsUnknown() {
+			networksElementsKnown = false
+			break
+		}
+	}
+	// The whole `networks` list can itself be unknown (e.g. networks =
+	// module.net.ids); it might still resolve to a non-empty list, so it counts
+	// toward satisfying the required-one-of-network-sources check the same way
+	// an unknown scalar source does.
+	networksMaybeProvided := networksProvided || model.Networks.IsUnknown()
+
 	if networkSet && planSet {
-		resp.Diagnostics.AddError(
+		resp.Diagnostics.AddAttributeError(
+			path.Root("network_plan"),
 			"Conflicting network configuration",
-			"`network` (attach to an existing network) and `network_plan` (auto-create a network) are mutually exclusive — set only one.",
+			"`network` (attach to an existing network) and `network_plan` (auto-create a network) are mutually exclusive. Set only one.",
 		)
+	}
+	if networkSet && networksKnown {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("networks"),
+			"Conflicting network configuration",
+			"`network` and `networks` are mutually exclusive. `networks` supersedes `network`. Set only one.",
+		)
+	}
+
+	if !model.NetworkType.IsUnknown() {
+		networkType := model.NetworkType.ValueString()
+		if networkType == "" {
+			networkType = "Isolated"
+		}
+		switch networkType {
+		case "Isolated", "L2":
+			notAllowedSet := false
+			if vrPlanSet {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("vr_plan"),
+					"Invalid attribute for network_type",
+					fmt.Sprintf("`vr_plan` is not allowed when `network_type` is %q.", networkType),
+				)
+				notAllowedSet = true
+			}
+			if !notAllowedSet && planAbsent && networkAbsent && !networksMaybeProvided {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("network_plan"),
+					"Missing network configuration",
+					fmt.Sprintf("one of `network_plan`, `network`, or `networks` is required when `network_type` is %q.", networkType),
+				)
+			}
+			// The platform rejects a public IP on an L2 network. assign_public_ip
+			// defaults to true, so both an explicit `true` and an omitted value
+			// (null) must be rejected here; only skip when it is unknown, since it
+			// might still resolve to `false`.
+			if networkType == "L2" && !model.AssignPublicIP.IsUnknown() &&
+				(model.AssignPublicIP.IsNull() || model.AssignPublicIP.ValueBool()) {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("assign_public_ip"),
+					"Invalid attribute for network_type",
+					"`assign_public_ip` cannot be `true` when `network_type` is \"L2\". The platform rejects a public IP for L2 networks. `assign_public_ip` defaults to `true`, so set `assign_public_ip = false` explicitly.",
+				)
+			}
+		case "Vpc":
+			notAllowedSet := false
+			if planSet {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("network_plan"),
+					"Invalid attribute for network_type",
+					"`network_plan` is not allowed when `network_type` is \"Vpc\".",
+				)
+				notAllowedSet = true
+			}
+			if !notAllowedSet && vrPlanAbsent && networkAbsent && !networksMaybeProvided {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("vr_plan"),
+					"Missing network configuration",
+					"one of `vr_plan`, `network`, or `networks` is required when `network_type` is \"Vpc\".",
+				)
+			}
+		default:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("network_type"),
+				"Invalid network_type",
+				fmt.Sprintf("`network_type` must be one of \"Isolated\", \"L2\", or \"Vpc\", got %q.", networkType),
+			)
+		}
+	}
+
+	switch {
+	case networksProvided && networksElementsKnown:
+		var nets []string
+		resp.Diagnostics.Append(model.Networks.ElementsAs(ctx, &nets, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		nets = instance.NormalizeNetworks(nets)
+		if len(nets) > 1 && !defaultNetworkPresent {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("default_network"),
+				"Missing default_network",
+				"`default_network` is required when `networks` has more than one entry.",
+			)
+		}
+		if defaultNetworkKnown {
+			dn := model.DefaultNetwork.ValueString()
+			if !slices.Contains(nets, dn) {
+				resp.Diagnostics.AddAttributeError(
+					path.Root("default_network"),
+					"Invalid default_network",
+					fmt.Sprintf("`default_network` (%q) must be one of the values in `networks`.", dn),
+				)
+			}
+		}
+	case networkSet && defaultNetworkKnown:
+		// default_network is validated against the effective network list even
+		// when that list is the single `network` attribute, not just `networks`.
+		dn := model.DefaultNetwork.ValueString()
+		net := model.Network.ValueString()
+		if dn != net {
+			resp.Diagnostics.AddAttributeError(
+				path.Root("default_network"),
+				"Invalid default_network",
+				fmt.Sprintf("`default_network` (%q) must equal `network` (%q) when `network` is set.", dn, net),
+			)
+		}
 	}
 }
 
@@ -371,6 +572,24 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	// assign_public_ip defaults to true (current behaviour) when unset.
 	isPublic := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
 
+	// networks: `networks` (list) supersedes the single `network`, treating the
+	// latter as a one-element list (ValidateConfig rejects setting both).
+	var networks []string
+	if !model.Networks.IsNull() && !model.Networks.IsUnknown() {
+		resp.Diagnostics.Append(model.Networks.ElementsAs(ctx, &networks, false)...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	} else if net := model.Network.ValueString(); net != "" {
+		networks = []string{net}
+	}
+	networks = instance.NormalizeNetworks(networks)
+
+	networkType := model.NetworkType.ValueString()
+	if networkType == "" {
+		networkType = "Isolated"
+	}
+
 	createReq := instance.CreateRequest{
 		Name:            model.Name.ValueString(),
 		CloudProvider:   model.CloudProvider.ValueString(),
@@ -380,8 +599,8 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Server:          "cloud-compute",
 		Template:        model.Template.ValueString(),
 		IsPublic:        isPublic,
-		NetworkType:     "Isolated",
-		Networks:        []string{},
+		NetworkType:     networkType,
+		Networks:        networks,
 		BillingCycle:    model.BillingCycle.ValueString(),
 		Plan:            model.Plan.ValueString(),
 		OSFamily:        "Linux",
@@ -389,11 +608,13 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Hostname:        model.Name.ValueString(),
 		Addons:          []string{},
 		StorageCategory: model.StorageCategory.ValueString(),
+		DefaultNetwork:  model.DefaultNetwork.ValueString(),
 	}
-	// Attach to an existing network when `network` is set (no untracked
-	// auto-created network); otherwise auto-create one from `network_plan`.
-	if net := model.Network.ValueString(); net != "" {
-		createReq.Networks = []string{net}
+	// vr_plan only applies to Vpc networks; network_plan (auto-create) only
+	// applies to Isolated/L2 (ValidateConfig already rejects the other
+	// combination, this just mirrors it in the request).
+	if networkType == "Vpc" {
+		createReq.VrPlan = model.VrPlan.ValueString()
 	} else {
 		createReq.NetworkPlan = model.NetworkPlan.ValueString()
 	}
@@ -482,8 +703,9 @@ func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, r
 	r.fillPublicIP(ctx, &model, vm)
 	// tags are not refreshed (the API does not return them); preserved from state.
 	// cloud_provider, region, template, plan, billing_cycle, project, ssh_key,
-	// network_plan, storage_category, user_data are create/update inputs preserved
-	// from state (not reliably echoed by the API in a comparable form).
+	// network, network_plan, network_type, vr_plan, networks, default_network,
+	// storage_category, user_data are create/update inputs preserved from state
+	// (not reliably echoed by the API in a comparable form).
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -848,16 +1070,48 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 }
 
 // ImportState seeds the create-only attributes the API does not return in a
-// comparable form so a post-import plan is zero-diff. Format (slash-separated,
-// trailing/empty segments allowed):
+// comparable form. A post-import plan is zero-diff as long as every segment the
+// config actually sets a value for is supplied; a segment left out (empty)
+// leaves the matching attribute null, which only matches a config that also
+// omits it. Format (slash-separated, trailing/empty segments allowed):
 //
-//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>
+//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>
 //
 // <slug>/<cloud_provider>/<region>/<template> are required. name, state and IPs
 // come from the subsequent Read; tags cannot be imported (the API does not
-// return them).
+// return them). `network_type`, `vr_plan`, `default_network`, and `networks`
+// were added after the rest of this format; an import ID written for an older
+// provider version, with fewer trailing segments, still works and simply
+// leaves those newer attributes null. `networks` is a list and does not fit
+// importPositional's single-value-per-segment scheme, so it is carried as an
+// optional final comma-separated segment (e.g. "net-a,net-b") and set
+// separately.
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
-	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category"}
-	importPositional(ctx, req, resp, fields, 4,
-		"<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>]")
+	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category", "network_type", "vr_plan", "default_network"}
+	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]"
+
+	// Split fully (not SplitN) so an ID with more segments than documented is
+	// rejected instead of the extra segments silently collapsing into the
+	// trailing networks value.
+	parts := strings.Split(req.ID, "/")
+	if len(parts) > len(fields)+1 {
+		resp.Diagnostics.AddError("Invalid import ID",
+			fmt.Sprintf("expected format %q, got %q", format, req.ID))
+		return
+	}
+	var networksRaw string
+	if len(parts) == len(fields)+1 {
+		networksRaw = strings.TrimSpace(parts[len(fields)])
+		req.ID = strings.Join(parts[:len(fields)], "/")
+	}
+
+	importPositional(ctx, req, resp, fields, 4, format)
+	if resp.Diagnostics.HasError() || networksRaw == "" {
+		return
+	}
+	networks := instance.NormalizeNetworks(strings.Split(networksRaw, ","))
+	if len(networks) == 0 {
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networks)...)
 }

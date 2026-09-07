@@ -9,19 +9,44 @@ description: |-
 Looks up an existing instance by slug, for example to attach resources to an
 instance created outside Terraform.
 
+The attached-volume lookup behind `root_volume` and `volumes` returns a single
+page of results. On an account with more volumes than fit on one page, scope the
+lookup with `region` and `project` so this instance's volumes are on that page.
+
 ## Example Usage
 
 ```terraform
-data "zcp_instance" "legacy" {
-  slug = "vm1-abc"
+data "zcp_instance" "web" {
+  slug = "vm1-web"
 }
 
-resource "zcp_dns_record" "legacy" {
-  domain  = zcp_dns_domain.example.id
-  name    = "legacy.example.com"
-  type    = "A"
-  content = data.zcp_instance.legacy.public_ip
-  ttl     = 3600
+output "root_volume" {
+  value = data.zcp_instance.web.root_volume
+}
+```
+
+Use `root_volume` to point a `zcp_volume_backup` at an instance's boot disk. A
+hardcoded volume slug breaks when the instance is rebuilt. `root_volume` stays
+correct.
+
+```terraform
+data "zcp_region" "yow" {
+  slug = "yow-1"
+}
+
+data "zcp_instance" "web" {
+  slug   = "vm1-web"
+  region = data.zcp_region.yow.slug
+}
+
+resource "zcp_volume_backup" "web_root" {
+  volume         = data.zcp_instance.web.root_volume
+  interval       = "dailyAt"
+  at             = 1
+  plan           = "backup-yow"
+  billing_cycle  = "hourly"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
 }
 ```
 
@@ -31,6 +56,14 @@ resource "zcp_dns_record" "legacy" {
 
 - `slug` (String) Instance slug.
 
+### Optional
+
+- `region` (String) Region slug to scope the attached-volume lookup (e.g.
+  `yow-1`). If omitted, volumes are listed across all regions and filtered to
+  this instance.
+- `project` (String) Project slug to scope the attached-volume lookup. Inherits
+  from the provider `default_project` if omitted.
+
 ### Read-Only
 
 - `id` (String) Instance slug (same as `slug`).
@@ -38,3 +71,7 @@ resource "zcp_dns_record" "legacy" {
 - `state` (String) Current power state.
 - `private_ip` (String) Private IP address.
 - `public_ip` (String) Public IP address, if assigned.
+- `root_volume` (String) Slug of the root volume attached to this instance.
+  Empty if no root volume is found.
+- `volumes` (List of String) Slugs of all volumes attached to this instance,
+  root volume first.

@@ -13,15 +13,17 @@ import (
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/firewall"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 
 	internalprovider "github.com/zsoftly/terraform-provider-zcp/internal/provider"
 )
 
 // fakeFirewallService satisfies firewallServiceIface.
 type fakeFirewallService struct {
-	rules   []firewall.FirewallRule
-	err     error
-	deleted []string
+	rules        []firewall.FirewallRule
+	err          error
+	deleted      []string
+	createCalled bool
 }
 
 func (f *fakeFirewallService) List(_ context.Context, _ string) ([]firewall.FirewallRule, error) {
@@ -31,11 +33,24 @@ func (f *fakeFirewallService) List(_ context.Context, _ string) ([]firewall.Fire
 // Create returns no rule object, matching the live API's asynchronous accept
 // (data: null). The resource recovers the rule by polling List.
 func (f *fakeFirewallService) Create(_ context.Context, _ string, _ firewall.CreateRequest) (*firewall.FirewallRule, error) {
+	f.createCalled = true
 	return nil, f.err
 }
 func (f *fakeFirewallService) Delete(_ context.Context, _ string, ruleID string) error {
 	f.deleted = append(f.deleted, ruleID)
 	return f.err
+}
+
+// fakeFirewallIPLister satisfies publicIPLister.
+type fakeFirewallIPLister struct {
+	ips             []ipaddress.IPAddress
+	err             error
+	lastListProject string
+}
+
+func (f *fakeFirewallIPLister) List(_ context.Context, _, _, project string) ([]ipaddress.IPAddress, error) {
+	f.lastListProject = project
+	return f.ips, f.err
 }
 
 // firewallRuleStateModel mirrors firewallRuleResourceModel for state extraction in tests.
@@ -67,6 +82,28 @@ func firewallRuleTFType(t *testing.T) tftypes.Type {
 func createFirewallRule(t *testing.T, svc *fakeFirewallService, ipAddress, protocol, cidrList, startPort, endPort string) resource.CreateResponse {
 	t.Helper()
 	r := internalprovider.NewFirewallRuleResourceWithService(svc)
+	return createFirewallRuleWithResource(t, r, ipAddress, protocol, cidrList, startPort, endPort)
+}
+
+// createFirewallRuleWithIPLister wires both the firewall service and a
+// public-IP lister, exercising the VPC-public-IP guard in Create.
+func createFirewallRuleWithIPLister(t *testing.T, svc *fakeFirewallService, ipSvc *fakeFirewallIPLister, ipAddress, protocol, cidrList, startPort, endPort string) resource.CreateResponse {
+	t.Helper()
+	r := internalprovider.NewFirewallRuleResourceWithServices(svc, ipSvc)
+	return createFirewallRuleWithResource(t, r, ipAddress, protocol, cidrList, startPort, endPort)
+}
+
+// createFirewallRuleWithIPListerAndProject additionally wires a provider
+// default project, exercising project-scoping of the VPC-public-IP guard's
+// list call.
+func createFirewallRuleWithIPListerAndProject(t *testing.T, svc *fakeFirewallService, ipSvc *fakeFirewallIPLister, defaultProject, ipAddress, protocol, cidrList, startPort, endPort string) resource.CreateResponse {
+	t.Helper()
+	r := internalprovider.NewFirewallRuleResourceWithServicesAndProject(svc, ipSvc, defaultProject)
+	return createFirewallRuleWithResource(t, r, ipAddress, protocol, cidrList, startPort, endPort)
+}
+
+func createFirewallRuleWithResource(t *testing.T, r resource.Resource, ipAddress, protocol, cidrList, startPort, endPort string) resource.CreateResponse {
+	t.Helper()
 	schResp := firewallRuleSchema(t)
 	tfType := firewallRuleTFType(t)
 	planVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
@@ -267,6 +304,116 @@ func TestFirewallRuleResource_createEmptyIDErrors(t *testing.T) {
 	resp := createFirewallRule(t, svc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected an error when the matched rule has an empty ID")
+	}
+}
+
+// A public IP that belongs to a VPC (non-empty VPCID) must be rejected before
+// Create calls the firewall service: the API accepts the request but never
+// applies it, so a create would otherwise poll until timeout. The firewall
+// service's Create must never be invoked in that case.
+func TestFirewallRuleResource_createRejectsVPCPublicIP(t *testing.T) {
+	svc := &fakeFirewallService{}
+	ipSvc := &fakeFirewallIPLister{
+		ips: []ipaddress.IPAddress{
+			{Slug: "1036521143", VPCID: "vpc-1"},
+		},
+	}
+	resp := createFirewallRuleWithIPLister(t, svc, ipSvc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error for a firewall rule on a VPC public IP")
+	}
+	if svc.createCalled {
+		t.Error("svc.Create must not be called when the guard rejects a VPC public IP")
+	}
+}
+
+// The guard has no region/project attributes of its own to scope with, so it
+// falls back to the provider's default project when one is configured.
+func TestFirewallRuleResource_createGuardScopesListToDefaultProject(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-net", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	ipSvc := &fakeFirewallIPLister{ips: []ipaddress.IPAddress{{Slug: "1036521143", NetworkID: "net-1"}}}
+	resp := createFirewallRuleWithIPListerAndProject(t, svc, ipSvc, "prod", "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if ipSvc.lastListProject != "prod" {
+		t.Errorf("List called with project %q, want %q", ipSvc.lastListProject, "prod")
+	}
+}
+
+// With no default project configured, the guard's list call stays unscoped.
+func TestFirewallRuleResource_createGuardListUnscopedWithoutDefaultProject(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-net", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	ipSvc := &fakeFirewallIPLister{ips: []ipaddress.IPAddress{{Slug: "1036521143", NetworkID: "net-1"}}}
+	resp := createFirewallRuleWithIPLister(t, svc, ipSvc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if ipSvc.lastListProject != "" {
+		t.Errorf("List called with project %q, want empty (no default project configured)", ipSvc.lastListProject)
+	}
+}
+
+// An isolated-network public IP (empty VPCID) must proceed to Create
+// normally.
+func TestFirewallRuleResource_createAllowsIsolatedNetworkIP(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-net", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	ipSvc := &fakeFirewallIPLister{
+		ips: []ipaddress.IPAddress{
+			{Slug: "1036521143", NetworkID: "net-1"},
+		},
+	}
+	resp := createFirewallRuleWithIPLister(t, svc, ipSvc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("isolated-network IP should proceed to create: %v", resp.Diagnostics)
+	}
+	var got firewallRuleStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.ID.ValueString() != "fw-net" {
+		t.Errorf("ID = %q, want %q", got.ID.ValueString(), "fw-net")
+	}
+}
+
+// A lister failure must not block Create: the create call's own error
+// handling already covers a genuinely invalid IP.
+func TestFirewallRuleResource_createProceedsWhenIPListerErrors(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-net", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	ipSvc := &fakeFirewallIPLister{err: errors.New("boom")}
+	resp := createFirewallRuleWithIPLister(t, svc, ipSvc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("a lister error should not block create: %v", resp.Diagnostics)
+	}
+}
+
+// A slug not found in the account IP list must not block Create.
+func TestFirewallRuleResource_createProceedsWhenIPNotFound(t *testing.T) {
+	svc := &fakeFirewallService{
+		rules: []firewall.FirewallRule{
+			{ID: "fw-net", Protocol: "tcp", CIDRList: "0.0.0.0/0", StartPort: "80", EndPort: "80", State: "Active"},
+		},
+	}
+	ipSvc := &fakeFirewallIPLister{ips: []ipaddress.IPAddress{{Slug: "other-slug"}}}
+	resp := createFirewallRuleWithIPLister(t, svc, ipSvc, "1036521143", "tcp", "0.0.0.0/0", "80", "80")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("an unlisted IP should not block create: %v", resp.Diagnostics)
 	}
 }
 

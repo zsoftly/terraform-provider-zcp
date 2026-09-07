@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
@@ -76,17 +77,17 @@ func (r *networkACLRuleResource) Schema(_ context.Context, _ resource.SchemaRequ
 			"action": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Rule action: `allow` or `deny`.",
-				Validators:          []validator.String{stringOneOfValidator{allowed: []string{"allow", "deny"}}},
+				Validators:          []validator.String{stringvalidator.OneOf("allow", "deny")},
 			},
 			"traffic_type": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Traffic direction: `ingress` or `egress`.",
-				Validators:          []validator.String{stringOneOfValidator{allowed: []string{"ingress", "egress"}}},
+				Validators:          []validator.String{stringvalidator.OneOf("ingress", "egress")},
 			},
 			"protocol": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "Protocol: `tcp`, `udp`, `icmp`, or `all`.",
-				Validators:          []validator.String{stringOneOfValidator{allowed: []string{"tcp", "udp", "icmp", "all"}}},
+				Validators:          []validator.String{stringvalidator.OneOf("tcp", "udp", "icmp", "all")},
 			},
 			"cidr_list": schema.StringAttribute{
 				Required:            true,

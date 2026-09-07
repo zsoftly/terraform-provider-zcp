@@ -7,12 +7,14 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/vmbackup"
@@ -35,6 +37,8 @@ type vmBackupServiceIface interface {
 type vmBackupResource struct {
 	svc            vmBackupServiceIface
 	defaultProject string
+	// deletePollInterval overrides the destroy poll interval; 0 uses the default.
+	deletePollInterval time.Duration
 }
 
 type vmBackupResourceModel struct {
@@ -63,7 +67,7 @@ func (r *vmBackupResource) Metadata(_ context.Context, req resource.MetadataRequ
 
 func (r *vmBackupResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a scheduled backup for a ZCP instance. The API has no update endpoint for backup schedules, so every change forces replacement.",
+		MarkdownDescription: "Manages a scheduled backup for a ZCP instance. The API has no update endpoint for backup schedules, so every change forces replacement. Deletion submits a cancellation request for the backup service, and the provider waits for the schedule to disappear from the listing.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -77,8 +81,9 @@ func (r *vmBackupResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"interval": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Backup interval (e.g. `daily`, `weekly`). Changing this forces replacement.",
+				MarkdownDescription: "Backup interval. Must be `dailyAt` or `hourlyAt`. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Validators:          []validator.String{stringvalidator.OneOf("dailyAt", "hourlyAt")},
 			},
 			"at": schema.Int64Attribute{
 				Optional:            true,
@@ -122,7 +127,7 @@ func (r *vmBackupResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"state": schema.StringAttribute{
 				Computed:            true,
-				MarkdownDescription: "Current state of the backup.",
+				MarkdownDescription: "State of the backup schedule. The VM backup listing never returns this field, so it is always null on this platform.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -176,8 +181,12 @@ func (r *vmBackupResource) Create(ctx context.Context, req resource.CreateReques
 	region := model.Region.ValueString()
 	project := r.projectOrDefault(model.Project)
 
-	// The create endpoint returns only an action acknowledgement, so capture the
-	// pre-create slugs and resolve the new backup from the list afterwards. An
+	// The create endpoint returns only an action acknowledgement, so the new
+	// backup is resolved from the list afterwards. The listing nests the VM
+	// under "virtual_machine" (VMBackup.VMSlug()), so the created schedule is
+	// bound by matching that slug against the configured VM. The pre-create
+	// baseline is kept as a secondary guard: it rules out a backup that already
+	// existed for this VM before this apply, rather than a genuinely new one. An
 	// incomplete before-set would misattribute a pre-existing backup, so a
 	// failed baseline list aborts the create.
 	before := map[string]bool{}
@@ -220,22 +229,28 @@ func (r *vmBackupResource) Create(ctx context.Context, req resource.CreateReques
 		if err != nil {
 			return false, err
 		}
-		// The list exposes no field comparable to the VM slug, so new entries
-		// are detected by diffing against the pre-create baseline. Binding is
-		// refused when several appear at once (e.g. parallel applies), because
-		// picking one arbitrarily could adopt another VM's backup.
+		// New entries are those absent from the pre-create baseline whose
+		// VMSlug() matches the configured VM. Binding is refused when several
+		// appear at once for the same VM (e.g. parallel applies), because
+		// picking one arbitrarily could adopt another apply's backup.
+		vmSlug := model.VirtualMachine.ValueString()
 		var fresh []*vmbackup.VMBackup
 		for i := range backups {
-			if !before[backups[i].Slug] {
-				fresh = append(fresh, &backups[i])
+			b := &backups[i]
+			if before[b.Slug] {
+				continue
 			}
+			if b.VMSlug() != vmSlug {
+				continue
+			}
+			fresh = append(fresh, b)
 		}
 		if len(fresh) > 1 {
 			slugs := make([]string, len(fresh))
 			for i, b := range fresh {
 				slugs[i] = b.Slug
 			}
-			return false, fmt.Errorf("%d new backups appeared (%s); cannot tell which one belongs to %s. Import the intended backup instead", len(fresh), strings.Join(slugs, ", "), model.VirtualMachine.ValueString())
+			return false, fmt.Errorf("%d new backups appeared for %s (%s); cannot tell which one belongs to this apply. Import the intended backup instead", len(fresh), vmSlug, strings.Join(slugs, ", "))
 		}
 		if len(fresh) == 1 {
 			created = fresh[0]
@@ -251,11 +266,9 @@ func (r *vmBackupResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	model.ID = types.StringValue(created.Slug)
-	if created.State != "" {
-		model.State = types.StringValue(created.State)
-	} else {
-		model.State = types.StringNull()
-	}
+	// The virtual-machines/backups listing never returns a state field, so
+	// this stays null rather than tracking a value the API never sends.
+	model.State = types.StringNull()
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -279,9 +292,12 @@ func (r *vmBackupResource) Read(ctx context.Context, req resource.ReadRequest, r
 	slug := model.ID.ValueString()
 	for _, b := range backups {
 		if b.Slug == slug {
-			if b.State != "" {
-				model.State = types.StringValue(b.State)
-			}
+			// b.VMSlug() is available here but is not used to refresh
+			// virtual_machine: that attribute is ForceNew and must never drift
+			// from the configured value. The listing also never returns a
+			// state field, so it stays null rather than tracking a value the
+			// API never sends.
+			model.State = types.StringNull()
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 			return
 		}
@@ -312,18 +328,26 @@ func (r *vmBackupResource) Delete(ctx context.Context, req resource.DeleteReques
 	deleteCtx, cancel := context.WithTimeout(ctx, deleteTimeout)
 	defer cancel()
 
+	// Delete submits a service-cancellation request (the API rejects a direct
+	// DELETE on this route). A slug that no longer exists comes back as a 403
+	// "The selected service not found.", which IsResourceNotFound recognizes
+	// alongside plain 404s.
 	slug := model.ID.ValueString()
 	err := r.svc.Delete(deleteCtx, slug)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete VM backup", err.Error())
 		return
 	}
 
 	region := model.Region.ValueString()
 	project := r.projectOrDefault(model.Project)
-	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
+	pollInterval := r.deletePollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	if err := pollUntilGone(deleteCtx, pollInterval, func(ctx context.Context) (bool, error) {
 		backups, err := r.svc.List(ctx, region, project)
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
 		}
 		if err != nil {

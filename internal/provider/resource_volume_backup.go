@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/backup"
@@ -34,6 +36,8 @@ type volumeBackupServiceIface interface {
 type volumeBackupResource struct {
 	svc            volumeBackupServiceIface
 	defaultProject string
+	// deletePollInterval overrides the destroy poll interval; 0 uses the default.
+	deletePollInterval time.Duration
 }
 
 type volumeBackupResourceModel struct {
@@ -75,8 +79,9 @@ func (r *volumeBackupResource) Schema(ctx context.Context, _ resource.SchemaRequ
 			},
 			"interval": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Backup interval (e.g. `dailyAt`). Changing this forces replacement.",
+				MarkdownDescription: "Backup interval. Must be `dailyAt` or `hourlyAt`. Changing this forces replacement.",
 				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Validators:          []validator.String{stringvalidator.OneOf("dailyAt", "hourlyAt")},
 			},
 			"at": schema.Int64Attribute{
 				Optional:            true,
@@ -264,16 +269,20 @@ func (r *volumeBackupResource) Delete(ctx context.Context, req resource.DeleteRe
 
 	slug := model.ID.ValueString()
 	err := r.svc.Delete(deleteCtx, slug)
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete volume backup", err.Error())
 		return
 	}
 
 	region := model.Region.ValueString()
 	project := r.projectOrDefault(model.Project)
-	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
+	pollInterval := r.deletePollInterval
+	if pollInterval <= 0 {
+		pollInterval = 5 * time.Second
+	}
+	if err := pollUntilGone(deleteCtx, pollInterval, func(ctx context.Context) (bool, error) {
 		backups, err := r.svc.List(ctx, region, project)
-		if apierrors.IsNotFound(err) {
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
 		}
 		if err != nil {

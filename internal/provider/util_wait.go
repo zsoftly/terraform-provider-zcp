@@ -14,21 +14,34 @@ import (
 // exists must return:
 //   - (true,  nil) — resource still exists; keep polling
 //   - (false, nil) — resource is confirmed gone; done
-//   - (_,    err)  — real API error; stop and surface it
+//   - (_,    err)  — a list (or similar) call failed; treated as transient
+//
+// A single failed call does not abort the poll: many callers have already
+// issued a delete/cancel request by the time they start polling, so aborting
+// on the next transient list error would report a destroy as failed when it
+// actually succeeded. Instead, an error keeps the poll going until ctx's
+// deadline, and only the last error is surfaced if the resource never
+// resolves to gone.
 func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx context.Context) (bool, error)) error {
+	var lastErr error
 	for {
 		found, err := exists(ctx)
 		if err != nil {
-			return err
-		}
-		if !found {
-			return nil
+			lastErr = err
+		} else {
+			lastErr = nil
+			if !found {
+				return nil
+			}
 		}
 		t := time.NewTimer(interval)
 		select {
 		case <-ctx.Done():
 			if !t.Stop() {
 				<-t.C
+			}
+			if lastErr != nil {
+				return lastErr
 			}
 			return ctx.Err()
 		case <-t.C:

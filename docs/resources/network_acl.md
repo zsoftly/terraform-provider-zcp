@@ -6,11 +6,34 @@ description: |-
 
 # zcp_network_acl
 
-Manages a ZCP Network ACL, a stateless allow/deny rule set that lives inside a
+Manages a ZCP Network ACL, a stateful allow/deny rule set that lives inside a
 VPC. Add rules with `zcp_network_acl_rule` and attach the ACL to a subnet with
 the `acl` argument on `zcp_network`. This mirrors `aws_network_acl` /
 `azurerm_network_security_group`. The ACL is a container, rules are separate
 resources, and you wire them together by reference.
+
+~> **Stateful, not stateless:** the platform (Apache CloudStack) tracks
+connections at the ACL and automatically accepts replies to traffic an allow
+rule permitted. Ingress and egress rules do not correlate, so an inbound
+listener still needs its own explicit ingress rule.
+
+An egress deny-all rule does not block replies to a connection an ingress rule
+already allowed. Outbound connections need no ephemeral-port catch-all rule. See
+the
+[CloudStack VPC networking guide](https://docs.cloudstack.apache.org/en/latest/adminguide/networking/virtual_private_cloud_config.html)
+for the underlying model.
+
+Connection tracking applies to both directions independently: the CloudStack
+guide's "ingress and egress rules do not correlate" means an allowed connection
+in either direction gets its own return traffic accepted automatically, and that
+acceptance never becomes an implicit rule in the other direction. Operators who,
+under the old "stateless" documentation, added an ingress rule allowing
+`tcp`/`udp` on `1024-65535` from `0.0.0.0/0` to let replies back in can remove
+it, and should: with connection tracking in place it is unnecessary, and it
+exposes every high port on the tier to the internet. CloudStack documents this
+behavior as a property of the ACL implementation in general, not something tied
+to a particular network offering; the provider has verified it against ZCP's
+current platform release (2026-09).
 
 ~> **No update endpoint:** the API cannot update an ACL in place, so changing
 `name`, `vpc`, or `description` forces replacement (which recreates its rules

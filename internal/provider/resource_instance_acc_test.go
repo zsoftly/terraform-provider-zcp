@@ -146,7 +146,10 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 				ImportStateVerify: true,
 				// Create-only attributes (supplied via the import ID, not a fresh
 				// Read) plus user_data and tags, which the API does not return.
-				ImportStateVerifyIgnore: []string{"plan", "billing_cycle", "ssh_key", "network_plan", "storage_category", "project", "user_data", "tags"},
+				// network_type, vr_plan, networks, and default_network are not part
+				// of this test's config (it uses network_plan), so import leaves them
+				// null and they are ignored here too.
+				ImportStateVerifyIgnore: []string{"plan", "billing_cycle", "ssh_key", "network_plan", "storage_category", "project", "user_data", "tags", "network_type", "vr_plan", "networks", "default_network"},
 				ImportStateIdFunc: func(s *terraform.State) (string, error) {
 					rs := s.RootModule().Resources["zcp_instance.test"]
 					cp := s.RootModule().Resources["data.zcp_region.r"].Primary.Attributes["cloud_provider"]

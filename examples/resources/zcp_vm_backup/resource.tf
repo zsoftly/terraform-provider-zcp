@@ -23,7 +23,7 @@ resource "zcp_instance" "web" {
 
 resource "zcp_vm_backup" "web_daily" {
   virtual_machine = zcp_instance.web.id
-  interval        = "daily"
+  interval        = "dailyAt"
   at              = 2
   plan            = "backup-yow"
   billing_cycle   = "hourly"
