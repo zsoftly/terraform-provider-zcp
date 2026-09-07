@@ -28,6 +28,11 @@ type fakeObjectStorageService struct {
 	deleted        []string
 	resizedTo      []int
 	deletedBuckets []string
+	versioning     string
+	policy         string
+	tags           map[string]string
+	lifecycle      string
+	cors           string
 }
 
 func (f *fakeObjectStorageService) Get(_ context.Context, _ string) (*objectstorage.ObjectStorage, error) {
@@ -71,6 +76,55 @@ func (f *fakeObjectStorageService) DeleteBucket(_ context.Context, _, bucketSlug
 	if f.err == nil {
 		f.bucket = nil
 	}
+	return f.err
+}
+func (f *fakeObjectStorageService) SetBucketVersioning(_ context.Context, _, _ string, enabled bool) error {
+	if enabled {
+		f.versioning = "Enabled"
+	} else {
+		f.versioning = "Suspended"
+	}
+	return f.err
+}
+func (f *fakeObjectStorageService) GetBucketVersioning(_ context.Context, _, _ string) (string, error) {
+	return f.versioning, f.err
+}
+func (f *fakeObjectStorageService) GetBucketPolicy(_ context.Context, _, _ string) (string, error) {
+	return f.policy, f.err
+}
+func (f *fakeObjectStorageService) PutBucketPolicy(_ context.Context, _, _ string, policy string) error {
+	f.policy = policy
+	return f.err
+}
+func (f *fakeObjectStorageService) GetBucketTagging(_ context.Context, _, _ string) (map[string]string, error) {
+	return f.tags, f.err
+}
+func (f *fakeObjectStorageService) SetBucketTagging(_ context.Context, _, _ string, tags map[string]string) error {
+	f.tags = tags
+	return f.err
+}
+func (f *fakeObjectStorageService) DeleteBucketTagging(_ context.Context, _, _ string) error {
+	f.tags = map[string]string{}
+	return f.err
+}
+func (f *fakeObjectStorageService) SetBucketExpiry(_ context.Context, _, _ string, _ string, _, _, _ int) error {
+	return f.err
+}
+func (f *fakeObjectStorageService) GetBucketLifecycle(_ context.Context, _, _ string) (string, error) {
+	return f.lifecycle, f.err
+}
+func (f *fakeObjectStorageService) DeleteBucketLifecycle(_ context.Context, _, _ string) error {
+	f.lifecycle = ""
+	return f.err
+}
+func (f *fakeObjectStorageService) SetBucketCORS(_ context.Context, _, _ string, _, _, _ []string, _ int) error {
+	return f.err
+}
+func (f *fakeObjectStorageService) GetBucketCORS(_ context.Context, _, _ string) (string, error) {
+	return f.cors, f.err
+}
+func (f *fakeObjectStorageService) DeleteBucketCORS(_ context.Context, _, _ string) error {
+	f.cors = ""
 	return f.err
 }
 

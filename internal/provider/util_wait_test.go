@@ -9,9 +9,16 @@ import (
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 )
 
+func pollUntilGoneTestContext(t *testing.T) context.Context {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	t.Cleanup(cancel)
+	return ctx
+}
+
 func TestPollUntilGoneTreatsAPINotFoundAsGone(t *testing.T) {
 	calls := 0
-	err := pollUntilGone(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
+	err := pollUntilGone(pollUntilGoneTestContext(t), time.Millisecond, func(context.Context) (bool, error) {
 		calls++
 		return false, &apierrors.APIError{StatusCode: 404, Message: "not found"}
 	})
@@ -25,7 +32,7 @@ func TestPollUntilGoneTreatsAPINotFoundAsGone(t *testing.T) {
 
 func TestPollUntilGoneTreatsRecognizedAPIResourceNotFoundAsGone(t *testing.T) {
 	calls := 0
-	err := pollUntilGone(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
+	err := pollUntilGone(pollUntilGoneTestContext(t), time.Millisecond, func(context.Context) (bool, error) {
 		calls++
 		return false, &apierrors.APIError{StatusCode: 403, Message: "The selected service not found."}
 	})
@@ -39,7 +46,7 @@ func TestPollUntilGoneTreatsRecognizedAPIResourceNotFoundAsGone(t *testing.T) {
 
 func TestPollUntilGoneTreatsLegacyBackendNotFoundAsGone(t *testing.T) {
 	calls := 0
-	err := pollUntilGone(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
+	err := pollUntilGone(pollUntilGoneTestContext(t), time.Millisecond, func(context.Context) (bool, error) {
 		calls++
 		return false, &apierrors.APIError{StatusCode: 500, Message: "No query results for model [Domain]"}
 	})
@@ -53,7 +60,7 @@ func TestPollUntilGoneTreatsLegacyBackendNotFoundAsGone(t *testing.T) {
 
 func TestPollUntilGoneRetriesTransientServerError(t *testing.T) {
 	calls := 0
-	err := pollUntilGone(context.Background(), time.Millisecond, func(context.Context) (bool, error) {
+	err := pollUntilGone(pollUntilGoneTestContext(t), time.Millisecond, func(context.Context) (bool, error) {
 		calls++
 		if calls == 1 {
 			return false, &apierrors.APIError{StatusCode: 500, Message: "internal error"}
@@ -80,7 +87,7 @@ func TestPollUntilGoneReturnsPermanentAPIErrorsImmediately(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
 			want := &apierrors.APIError{StatusCode: tc.statusCode, Message: "request rejected"}
-			err := pollUntilGone(context.Background(), time.Hour, func(context.Context) (bool, error) {
+			err := pollUntilGone(pollUntilGoneTestContext(t), time.Hour, func(context.Context) (bool, error) {
 				calls++
 				return false, want
 			})
@@ -97,7 +104,7 @@ func TestPollUntilGoneReturnsPermanentAPIErrorsImmediately(t *testing.T) {
 func TestPollUntilGoneReturnsUnrecognizedErrorImmediately(t *testing.T) {
 	calls := 0
 	want := errors.New("unexpected failure")
-	err := pollUntilGone(context.Background(), time.Hour, func(context.Context) (bool, error) {
+	err := pollUntilGone(pollUntilGoneTestContext(t), time.Hour, func(context.Context) (bool, error) {
 		calls++
 		return false, want
 	})
@@ -129,7 +136,7 @@ func TestPollUntilGoneDoesNotTreatMarkerCollisionsAsGone(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			calls := 0
-			err := pollUntilGone(context.Background(), time.Hour, func(context.Context) (bool, error) {
+			err := pollUntilGone(pollUntilGoneTestContext(t), time.Hour, func(context.Context) (bool, error) {
 				calls++
 				return false, tc.err
 			})
@@ -140,5 +147,17 @@ func TestPollUntilGoneDoesNotTreatMarkerCollisionsAsGone(t *testing.T) {
 				t.Errorf("pollUntilGone() calls = %d, want 1", calls)
 			}
 		})
+	}
+}
+
+func TestPollUntilGoneReturnsLastTransientErrorAtDeadline(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	want := &apierrors.APIError{StatusCode: 500, Message: "internal error"}
+	err := pollUntilGone(ctx, time.Millisecond, func(context.Context) (bool, error) {
+		return false, want
+	})
+	if !errors.Is(err, want) {
+		t.Fatalf("pollUntilGone() error = %v, want %v", err, want)
 	}
 }

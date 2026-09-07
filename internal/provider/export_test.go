@@ -266,6 +266,13 @@ func NewObjectStorageBucketResourceWithService(svc objectStorageServiceIface) re
 	return &objectStorageBucketResource{svc: svc}
 }
 
+// NewObjectStorageBucketConfigurationResourceWithService creates a bucket
+// configuration resource pre-wired with the given service; available only in
+// test binaries.
+func NewObjectStorageBucketConfigurationResourceWithService(svc objectStorageServiceIface, kind string) resource.Resource {
+	return &bucketConfigurationResource{svc: svc, kind: kind}
+}
+
 // NewVMSnapshotResourceWithService creates a vmSnapshotResource pre-wired with
 // the given service; available only in test binaries.
 func NewVMSnapshotResourceWithService(svc vmSnapshotServiceIface) resource.Resource {

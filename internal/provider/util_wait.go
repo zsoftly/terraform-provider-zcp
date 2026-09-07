@@ -62,7 +62,8 @@ func pollUntilGone(ctx context.Context, interval time.Duration, exists func(ctx 
 }
 
 // classifyPollUntilGoneError identifies API responses that are safe to handle
-// while waiting for deletion. Callers translate package-specific not-found
+// while waiting for deletion. Recognized API not-found responses mean the
+// resource is gone. Callers may translate other package-specific not-found
 // sentinels to (false, nil) before invoking pollUntilGone.
 func classifyPollUntilGoneError(err error) (gone, transient bool) {
 	var apiErr *apierrors.APIError

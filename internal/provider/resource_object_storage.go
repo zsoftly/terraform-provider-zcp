@@ -20,8 +20,7 @@ var _ resource.ResourceWithConfigure = &objectStorageResource{}
 var _ resource.ResourceWithImportState = &objectStorageResource{}
 var _ resource.ResourceWithValidateConfig = &objectStorageResource{}
 
-// objectStorageServiceIface is shared by zcp_object_storage and
-// zcp_object_storage_bucket.
+// objectStorageServiceIface is shared by object storage resources.
 type objectStorageServiceIface interface {
 	Get(ctx context.Context, slug string) (*objectstorage.ObjectStorage, error)
 	Create(ctx context.Context, req objectstorage.CreateRequest) (*objectstorage.ObjectStorage, error)
@@ -30,6 +29,19 @@ type objectStorageServiceIface interface {
 	GetBucket(ctx context.Context, slug, bucketSlug string) (*objectstorage.Bucket, error)
 	CreateBucket(ctx context.Context, slug, name string) (*objectstorage.Bucket, error)
 	DeleteBucket(ctx context.Context, slug, bucketSlug string) error
+	SetBucketVersioning(ctx context.Context, slug, bucketName string, enabled bool) error
+	GetBucketVersioning(ctx context.Context, slug, bucketName string) (string, error)
+	GetBucketPolicy(ctx context.Context, slug, bucketName string) (string, error)
+	PutBucketPolicy(ctx context.Context, slug, bucketName, policyJSON string) error
+	GetBucketTagging(ctx context.Context, slug, bucketName string) (map[string]string, error)
+	SetBucketTagging(ctx context.Context, slug, bucketName string, tags map[string]string) error
+	DeleteBucketTagging(ctx context.Context, slug, bucketName string) error
+	SetBucketExpiry(ctx context.Context, slug, bucketName, prefix string, days, noncurrentDays, abortMultipartDays int) error
+	GetBucketLifecycle(ctx context.Context, slug, bucketName string) (string, error)
+	DeleteBucketLifecycle(ctx context.Context, slug, bucketName string) error
+	SetBucketCORS(ctx context.Context, slug, bucketName string, origins, methods, headers []string, maxAgeSeconds int) error
+	GetBucketCORS(ctx context.Context, slug, bucketName string) (string, error)
+	DeleteBucketCORS(ctx context.Context, slug, bucketName string) error
 }
 
 type objectStorageResource struct {

@@ -1,9 +1,14 @@
 # terraform-provider-zcp Release Notes
 
-## v0.1.4 (2026-09-07)
+## v0.2.0 (2026-09-07)
 
 This release adds VPC instance configuration, volume data sources, and improved
 delete handling. It uses the zcp-cli SDK v0.0.29.
+
+- New object storage bucket configuration resources manage versioning, policy,
+  tags, lifecycle expiry, and CORS through the store's S3-compatible gateway.
+  They obtain gateway credentials internally and do not expose them as resource
+  attributes.
 
 - `zcp_instance` supports VPC networks, multiple existing networks, and
   virtual-router plans. Plan validation rejects combinations the API does not
@@ -28,7 +33,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 0.1.4"
+      version = "~> 0.2.0"
     }
   }
 }

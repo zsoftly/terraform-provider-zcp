@@ -11,10 +11,11 @@
 
 Terraform and OpenTofu provider for the ZSoftly Cloud Platform (ZCP). It manages
 compute, networking, Kubernetes, DNS, object storage, VPN, and account
-governance through the ZCP API, using the same SDK as the
+governance through the ZCP API. Object storage bucket configuration uses the
+store's S3-compatible gateway through the same SDK. The provider uses the
 [zcp CLI](https://github.com/zsoftly/zcp-cli).
 
-38 resources and 12 data sources. Full reference under [docs/](docs/), runnable
+43 resources and 13 data sources. Full reference under [docs/](docs/), runnable
 configurations under [examples/](examples/).
 
 ## Requirements

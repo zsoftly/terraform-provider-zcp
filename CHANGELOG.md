@@ -5,9 +5,17 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
-## [v0.1.4] - 2026-09-07
+## [v0.2.0] - 2026-09-07
 
 ### Added
+
+- **Object storage bucket configuration resources.**
+  `zcp_object_storage_bucket_versioning`, `zcp_object_storage_bucket_policy`,
+  `zcp_object_storage_bucket_tagging`, `zcp_object_storage_bucket_lifecycle`,
+  and `zcp_object_storage_bucket_cors` manage their respective S3 gateway
+  settings through the store's S3-compatible gateway. They obtain gateway
+  credentials internally and do not expose them as resource attributes. Each
+  imports with `<store-slug>/<bucket-slug>`.
 
 - **`zcp_instance` supports the `Vpc` network type and attaching multiple
   networks.** This brings the resource up to the zcp-cli v0.0.27 instance-create
