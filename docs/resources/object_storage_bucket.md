@@ -8,9 +8,12 @@ description: |-
 
 Manages a bucket in a `zcp_object_storage` store.
 
-~> Bucket contents, policies, versioning, and lifecycle settings are managed via
-the S3 API (e.g. the AWS or minio providers pointed at the store's endpoint with
-its `api_key`/`api_secret`), not by this resource.
+~> Bucket contents remain outside this resource. Manage bucket versioning,
+policy, tags, lifecycle, and CORS with the matching bucket configuration
+resources. Those resources use the store's S3-compatible gateway, obtain gateway
+credentials internally, and do not expose them as resource attributes. They do
+not manage object upload, download, copy, move, presigned URLs, or bucket
+encryption.
 
 ## Example Usage
 

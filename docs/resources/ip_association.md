@@ -12,9 +12,11 @@ association). You acquire and own an IP as its own resource, then attach it to
 an instance with a separate association resource.
 
 The `network` argument is the network the instance is on (a VPC tier or a
-standalone `zcp_network`), so the same resource covers both topologies.
-Association is create/delete only. Static NAT is enabled on create and removed
-on destroy. Changing any argument forces replacement.
+standalone `zcp_network`), so the same resource covers both topologies. For VPC
+public IPs, control ingress with `zcp_network_acl_rule` instead of
+`zcp_firewall_rule` (see `zcp_firewall_rule` for why). Association is
+create/delete only. Static NAT is enabled on create and removed on destroy.
+Changing any argument forces replacement.
 
 ## Example Usage
 

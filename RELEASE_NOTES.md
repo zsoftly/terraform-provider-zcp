@@ -1,5 +1,49 @@
 # terraform-provider-zcp Release Notes
 
+## v0.2.0 (2026-09-07)
+
+This release adds VPC instance configuration, volume data sources, and improved
+delete handling. It uses the zcp-cli SDK v0.0.29.
+
+- New object storage bucket configuration resources manage versioning, policy,
+  tags, lifecycle expiry, and CORS through the store's S3-compatible gateway.
+  The SDK resolves the gateway endpoint from the selected object-storage
+  instance, without a hardcoded regional endpoint. They obtain gateway
+  credentials internally and do not expose them as resource attributes.
+- The provider serializes configuration writes to the same bucket and retries
+  gateway concurrent-modification responses during an apply.
+
+- `zcp_instance` supports VPC networks, multiple existing networks, and
+  virtual-router plans. Plan validation rejects combinations the API does not
+  support.
+- New `data.zcp_volume` looks up a volume by slug. `data.zcp_instance` exposes
+  `root_volume` and `volumes` for attached disks.
+- Volume lookups retrieve every API page within the configured region and
+  project scope. `data.zcp_volume`, `data.zcp_instance.root_volume`, and
+  `data.zcp_instance.volumes` no longer miss results beyond the first page.
+- `zcp_vm_backup` destroy uses the platform cancellation workflow and handles
+  recognized transient polling errors without waiting for the delete timeout on
+  permanent API errors.
+- `zcp_volume_backup` decodes the current backup-list response shape.
+- `zcp_ip_address` reports the correct 422 error when a VPC has no network tier.
+  `zcp_network_acl` docs now describe stateful behavior.
+
+Upgrade your required provider version and run `terraform init -upgrade` or
+`tofu init -upgrade`:
+
+```hcl
+terraform {
+  required_providers {
+    zcp = {
+      source  = "zsoftly/zcp"
+      version = "~> 0.2.0"
+    }
+  }
+}
+```
+
+---
+
 ## v0.1.3 (2026-07-20)
 
 Fixes `zcp_port_forward` and `zcp_firewall_rule`.

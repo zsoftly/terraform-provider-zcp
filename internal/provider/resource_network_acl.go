@@ -52,7 +52,7 @@ func (r *networkACLResource) Metadata(_ context.Context, req resource.MetadataRe
 func (r *networkACLResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP Network ACL (a stateless allow/deny rule set) inside a VPC. Attach it to a subnet with the `acl` argument on `zcp_network`, and add rules with `zcp_network_acl_rule`. The ACL has no update endpoint, so changing any attribute forces replacement.",
+		MarkdownDescription: "Manages a ZCP Network ACL, a stateful allow/deny rule set inside a VPC. The ACL tracks connections and accepts replies to allowed traffic automatically. Ingress and egress rules do not correlate, so an inbound listener still needs an explicit ingress rule. Attach the ACL to a subnet with the `acl` argument on `zcp_network`, and add rules with `zcp_network_acl_rule`. The ACL has no update endpoint, so changing any attribute forces replacement.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,

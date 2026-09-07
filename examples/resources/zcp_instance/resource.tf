@@ -68,6 +68,53 @@ resource "zcp_instance" "app" {
   }
 }
 
+# ── Vpc network type: attach via a virtual-router plan ────────────────────────
+# network_type = "Vpc" places the instance behind a virtual router instead of an
+# isolated network. vr_plan auto-provisions the router (network_plan is not
+# allowed for Vpc). Pass existing VPC networks with `networks` instead if you
+# don't want an auto-created router.
+#
+# network_type is optional and defaults to "Isolated" when omitted (see the
+# resources above). It is not computed, so leaving it unset never writes a
+# value to state and never plans a replacement for an instance created before
+# this attribute existed.
+resource "zcp_instance" "vpc" {
+  name             = "vpc-01"
+  cloud_provider   = data.zcp_region.yow.cloud_provider
+  region           = data.zcp_region.yow.slug
+  template         = "ubuntu-2404-lts"
+  plan             = "ci1xs"
+  billing_cycle    = "hourly"
+  network_type     = "Vpc"
+  vr_plan          = "vr-basic"
+  storage_category = "nvme"
+  ssh_key          = zcp_ssh_key.deploy.name
+}
+
+# ── Multiple existing networks with a default ──────────────────────────────────
+# networks attaches the instance to more than one existing network. With more
+# than one entry, default_network picks which one carries the default route.
+resource "zcp_network" "app_secondary" {
+  name           = "app-net-2"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  network_plan   = "inet-yow"
+  billing_cycle  = "hourly"
+}
+
+resource "zcp_instance" "multi_net" {
+  name             = "multi-net-01"
+  cloud_provider   = data.zcp_region.yow.cloud_provider
+  region           = data.zcp_region.yow.slug
+  template         = "ubuntu-2404-lts"
+  plan             = "ci1xs"
+  billing_cycle    = "hourly"
+  networks         = [zcp_network.app.id, zcp_network.app_secondary.id]
+  default_network  = zcp_network.app.id
+  storage_category = "nvme"
+  ssh_key          = zcp_ssh_key.deploy.name
+}
+
 # ── Outputs ───────────────────────────────────────────────────────────────────
 output "web_private_ip" {
   description = "Private IP of the web instance."
@@ -80,7 +127,9 @@ output "web_public_ip" {
 }
 
 # ── Import ────────────────────────────────────────────────────────────────────
-# Create-only attributes the API does not echo back are supplied positionally:
+# Create-only attributes the API does not echo back are supplied positionally.
+# `networks` does not fit a single segment, so it is a trailing comma-separated
+# segment of its own:
 # terraform import zcp_instance.web \
-#   '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network_plan>/<storage_category>]'
+#   '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]'
 #   e.g. terraform import zcp_instance.web 'web-01-abc/nimbo/yow-1/ubuntu-2404-lts'

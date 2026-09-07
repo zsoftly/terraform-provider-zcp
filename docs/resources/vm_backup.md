@@ -7,14 +7,16 @@ description: |-
 # zcp_vm_backup
 
 Manages a scheduled backup for a ZCP instance. The API has no update endpoint
-for backup schedules, so every change forces replacement.
+for backup schedules, so every change forces replacement. Deletion submits a
+cancellation request for the backup service, and the provider waits for the
+schedule to disappear from the listing.
 
 ## Example Usage
 
 ```terraform
 resource "zcp_vm_backup" "web_daily" {
   virtual_machine = zcp_instance.web.id
-  interval        = "daily"
+  interval        = "dailyAt"
   at              = 2
   plan            = "backup-yow"
   billing_cycle   = "hourly"
@@ -29,7 +31,7 @@ Import using
 `<slug>/<region>/<cloud_provider>/<virtual_machine>/<interval>/<plan>/<billing_cycle>[/<project>]`:
 
 ```shell
-terraform import zcp_vm_backup.web_daily vm1-backup-b1/yow-1/zsoftly/vm1-abc/daily/backup-yow/hourly
+terraform import zcp_vm_backup.web_daily vm1-backup-b1/yow-1/zsoftly/vm1-abc/dailyAt/backup-yow/hourly
 ```
 
 ## Schema
@@ -38,8 +40,8 @@ terraform import zcp_vm_backup.web_daily vm1-backup-b1/yow-1/zsoftly/vm1-abc/dai
 
 - `virtual_machine` (String) Slug of the instance to back up. Changing this
   forces replacement.
-- `interval` (String) Backup interval (e.g. `daily`, `weekly`). Changing this
-  forces replacement.
+- `interval` (String) Backup interval. Must be `dailyAt` or `hourlyAt`. Changing
+  this forces replacement.
 - `plan` (String) Backup plan slug (e.g. `backup-yow`). Changing this forces
   replacement.
 - `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing
@@ -64,4 +66,5 @@ terraform import zcp_vm_backup.web_daily vm1-backup-b1/yow-1/zsoftly/vm1-abc/dai
 ### Read-Only
 
 - `id` (String) VM backup slug.
-- `state` (String) Current state of the backup.
+- `state` (String) State of the backup schedule. The VM backup listing never
+  returns this field, so it is always null on this platform.

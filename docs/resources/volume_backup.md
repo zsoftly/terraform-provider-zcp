@@ -38,8 +38,8 @@ terraform import zcp_volume_backup.data_daily root-backup-b1/yow-1/zsoftly/data-
 
 - `volume` (String) Slug of the block storage volume to back up. Changing this
   forces replacement.
-- `interval` (String) Backup interval (e.g. `dailyAt`). Changing this forces
-  replacement.
+- `interval` (String) Backup interval. Must be `dailyAt` or `hourlyAt`. Changing
+  this forces replacement.
 - `billing_cycle` (String) Billing cycle (e.g. `hourly`, `monthly`). Changing
   this forces replacement.
 - `cloud_provider` (String) Cloud provider slug. Changing this forces

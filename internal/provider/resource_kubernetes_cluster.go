@@ -182,8 +182,8 @@ func (r *kubernetesClusterResource) Configure(_ context.Context, req resource.Co
 	r.defaultProject = pd.DefaultProject
 }
 
-// clusterWorkers returns the authoritative worker count, preferring the
-// CloudStack-side meta size (populated once Running) over node_size.
+// clusterWorkers returns the authoritative worker count. It uses the platform
+// metadata size, when available, before node_size.
 func clusterWorkers(c *kubernetes.Cluster) int64 {
 	if c.Meta != nil && c.Meta.Size != "" {
 		if n, err := strconv.Atoi(c.Meta.Size); err == nil {

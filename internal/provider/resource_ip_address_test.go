@@ -3,6 +3,7 @@ package provider_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -71,6 +72,34 @@ func createIPAddress(t *testing.T, svc *fakeIPAddressService, plan, billingCycle
 		"plan":          tftypes.NewValue(tftypes.String, plan),
 		"billing_cycle": tftypes.NewValue(tftypes.String, billingCycle),
 		"vpc":           tftypes.NewValue(tftypes.String, nil),
+		"network":       tftypes.NewValue(tftypes.String, nil),
+		"project":       tftypes.NewValue(tftypes.String, nil),
+		"ip_address":    tftypes.NewValue(tftypes.String, nil),
+		"type":          tftypes.NewValue(tftypes.String, nil),
+		"timeouts":      timeoutsNull(t, schResp),
+	})
+	createReq := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal},
+	}
+	createResp := &resource.CreateResponse{
+		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)},
+	}
+	r.Create(context.Background(), createReq, createResp)
+	return *createResp
+}
+
+// createIPAddressWithVPC is like createIPAddress but sets the vpc attribute,
+// for exercising the VPC-named branch of the "no networks in vpc" error.
+func createIPAddressWithVPC(t *testing.T, svc *fakeIPAddressService, plan, billingCycle, vpc string) resource.CreateResponse {
+	t.Helper()
+	r := internalprovider.NewIPAddressResourceWithService(svc)
+	schResp := ipAddressSchema(t)
+	tfType := ipAddressTFType(t)
+	planVal := tftypes.NewValue(tfType, map[string]tftypes.Value{
+		"id":            tftypes.NewValue(tftypes.String, nil),
+		"plan":          tftypes.NewValue(tftypes.String, plan),
+		"billing_cycle": tftypes.NewValue(tftypes.String, billingCycle),
+		"vpc":           tftypes.NewValue(tftypes.String, vpc),
 		"network":       tftypes.NewValue(tftypes.String, nil),
 		"project":       tftypes.NewValue(tftypes.String, nil),
 		"ip_address":    tftypes.NewValue(tftypes.String, nil),
@@ -168,6 +197,115 @@ func TestIPAddressResource_createServiceError(t *testing.T) {
 	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error on create failure, got none")
+	}
+}
+
+// When Allocate fails because the VPC has no network yet, Create must replace
+// the raw API error with a friendlier diagnostic naming the depends_on fix,
+// while still surfacing the original API error text in the diagnostic detail.
+func TestIPAddressResource_createNoNetworksInVPCReplacesError(t *testing.T) {
+	origErr := "We cannot acquire IP Address when there are no networks in vpc."
+	svc := &fakeIPAddressService{err: &apierrors.APIError{StatusCode: 422, Message: origErr}}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the VPC has no network yet")
+	}
+	found := false
+	var detail string
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			found = true
+			detail = d.Detail()
+		}
+	}
+	if !found {
+		t.Fatalf("expected a diagnostic summary %q, got: %v", "VPC has no network yet", resp.Diagnostics)
+	}
+	if !strings.Contains(detail, origErr) {
+		t.Errorf("diagnostic detail = %q, want it to contain the original API error %q", detail, origErr)
+	}
+}
+
+// When the vpc attribute is null (the API error can also arise when only
+// `network` is set), the friendly message must not render an empty `VPC ""`.
+func TestIPAddressResource_createNoNetworksInVPCNullVPCOmitsEmptyName(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 422, Message: "We cannot acquire IP Address when there are no networks in vpc."},
+	}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the VPC has no network yet")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() != "VPC has no network yet" {
+			continue
+		}
+		if strings.Contains(d.Detail(), `VPC ""`) {
+			t.Errorf("diagnostic detail = %q, should not render an empty VPC name", d.Detail())
+		}
+	}
+}
+
+// When the vpc attribute is set, the friendly message names it.
+func TestIPAddressResource_createNoNetworksInVPCNamesConfiguredVPC(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 422, Message: "We cannot acquire IP Address when there are no networks in vpc."},
+	}
+	resp := createIPAddressWithVPC(t, svc, "public-ip-1", "hourly", "main-vpc")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an error when the VPC has no network yet")
+	}
+	found := false
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" && strings.Contains(d.Detail(), `VPC "main-vpc"`) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected the diagnostic to name VPC \"main-vpc\", got: %v", resp.Diagnostics)
+	}
+}
+
+func TestIPAddressResource_createNoNetworksInVPCWrongStatusDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 400, Message: "We cannot acquire IP Address when there are no networks in vpc."},
+	}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("wrong-status API error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
+	}
+}
+
+func TestIPAddressResource_createSimilarErrorDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{
+		err: &apierrors.APIError{StatusCode: 422, Message: "Cannot acquire IP Address because the selected plan has no networks in vpc."},
+	}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("similar API error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
+	}
+}
+
+func TestIPAddressResource_createUnstructuredNoNetworksErrorDoesNotReplaceError(t *testing.T) {
+	svc := &fakeIPAddressService{err: errors.New("We cannot acquire IP Address when there are no networks in vpc.")}
+	resp := createIPAddress(t, svc, "public-ip-1", "hourly")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected an allocation error")
+	}
+	for _, d := range resp.Diagnostics {
+		if d.Summary() == "VPC has no network yet" {
+			t.Fatalf("unstructured error must retain its original diagnostic, got: %v", resp.Diagnostics)
+		}
 	}
 }
 

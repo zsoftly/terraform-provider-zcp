@@ -6,11 +6,31 @@ description: |-
 
 # zcp_network_acl
 
-Manages a ZCP Network ACL, a stateless allow/deny rule set that lives inside a
+Manages a ZCP Network ACL, a stateful allow/deny rule set that lives inside a
 VPC. Add rules with `zcp_network_acl_rule` and attach the ACL to a subnet with
 the `acl` argument on `zcp_network`. This mirrors `aws_network_acl` /
 `azurerm_network_security_group`. The ACL is a container, rules are separate
 resources, and you wire them together by reference.
+
+~> **Stateful, not stateless:** the platform tracks connections at the ACL and
+automatically accepts replies to traffic permitted by an allow rule. Ingress and
+egress rules do not correlate, so an inbound listener still needs its own
+explicit ingress rule.
+
+An egress deny-all rule does not block replies to a connection an ingress rule
+already allowed. Outbound connections need no ephemeral-port catch-all rule.
+
+Connection tracking applies to both directions independently. An allowed
+connection in either direction gets its own return traffic accepted
+automatically, and that acceptance never becomes an implicit rule in the other
+direction.
+
+Operators who added an ingress rule allowing `tcp`/`udp` on `1024-65535` from
+`0.0.0.0/0` to allow reply traffic under the old "stateless" guidance can remove
+it. Connection tracking makes the rule unnecessary and exposes every high port
+on the tier to the internet. This behavior is not tied to a particular network
+offering. The provider has verified it against ZCP's current platform release
+(2026-09).
 
 ~> **No update endpoint:** the API cannot update an ACL in place, so changing
 `name`, `vpc`, or `description` forces replacement (which recreates its rules

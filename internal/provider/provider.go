@@ -144,6 +144,11 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewLoadBalancerAttachmentResource,
 		NewObjectStorageResource,
 		NewObjectStorageBucketResource,
+		NewObjectStorageBucketVersioningResource,
+		NewObjectStorageBucketPolicyResource,
+		NewObjectStorageBucketTaggingResource,
+		NewObjectStorageBucketLifecycleResource,
+		NewObjectStorageBucketCORSResource,
 		NewVMSnapshotResource,
 		NewVMBackupResource,
 		NewVolumeSnapshotResource,
@@ -174,6 +179,7 @@ func (p *ZCPProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		NewSSHKeyDataSource,
 		NewKubernetesVersionDataSource,
 		NewInstanceDataSource,
+		NewVolumeDataSource,
 		NewPermissionsDataSource,
 	}
 }

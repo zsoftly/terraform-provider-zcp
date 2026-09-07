@@ -2,7 +2,10 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -20,6 +23,20 @@ var _ resource.Resource = &ipAddressResource{}
 var _ resource.ResourceWithConfigure = &ipAddressResource{}
 var _ resource.ResourceWithImportState = &ipAddressResource{}
 var _ resource.ResourceWithValidateConfig = &ipAddressResource{}
+
+const noNetworksInVPCMarker = "cannot acquire ip address when there are no networks in vpc"
+
+// isNoNetworksInVPCError identifies the API's documented allocation precondition.
+// The client returns API failures as *apierrors.APIError, so inspect its Message
+// rather than the formatted error string, which includes transport details.
+func isNoNetworksInVPCError(err error) bool {
+	var apiErr *apierrors.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusUnprocessableEntity {
+		return false
+	}
+	message := strings.ToLower(apiErr.Message)
+	return strings.Contains(message, noNetworksInVPCMarker)
+}
 
 // ValidateConfig enforces that at least one of vpc or network is set: the API
 // rejects an allocation with neither ("The vpc field is required when network is
@@ -173,6 +190,20 @@ func (r *ipAddressResource) Create(ctx context.Context, req resource.CreateReque
 		Project:      project,
 	})
 	if err != nil {
+		if isNoNetworksInVPCError(err) {
+			vpcRef := "the VPC"
+			if !model.VPC.IsNull() && model.VPC.ValueString() != "" {
+				vpcRef = fmt.Sprintf("VPC %q", model.VPC.ValueString())
+			}
+			resp.Diagnostics.AddError(
+				"VPC has no network yet",
+				fmt.Sprintf(
+					"The API refuses to allocate a public IP into %s until the VPC has at least one network (tier). Create the tier first, then add `depends_on = [zcp_network.<tier>]` to this zcp_ip_address resource: the vpc slug alone gives Terraform no ordering information between the two resources. Original error: %s",
+					vpcRef, err.Error(),
+				),
+			)
+			return
+		}
 		resp.Diagnostics.AddError("Failed to allocate IP address", err.Error())
 		return
 	}

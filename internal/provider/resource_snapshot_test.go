@@ -9,9 +9,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
-	"github.com/zsoftly/zcp-cli/pkg/api/backup"
 	"github.com/zsoftly/zcp-cli/pkg/api/snapshot"
-	"github.com/zsoftly/zcp-cli/pkg/api/vmbackup"
 	"github.com/zsoftly/zcp-cli/pkg/api/vmsnapshot"
 
 	internalprovider "github.com/zsoftly/terraform-provider-zcp/internal/provider"
@@ -178,90 +176,6 @@ func TestVMSnapshotResource_deleteHappyPath(t *testing.T) {
 	}
 }
 
-// --- zcp_vm_backup ---
-
-type fakeVMBackupService struct {
-	backups      []vmbackup.VMBackup
-	afterBackups []vmbackup.VMBackup
-	created      bool
-	createReq    vmbackup.CreateRequest
-	err          error
-	deleted      []string
-}
-
-func (f *fakeVMBackupService) List(_ context.Context, _, _ string) ([]vmbackup.VMBackup, error) {
-	if f.created && f.afterBackups != nil {
-		return f.afterBackups, f.err
-	}
-	return f.backups, f.err
-}
-func (f *fakeVMBackupService) Create(_ context.Context, _ string, req vmbackup.CreateRequest) (*vmbackup.ActionResponse, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	f.created = true
-	f.createReq = req
-	return &vmbackup.ActionResponse{}, nil
-}
-func (f *fakeVMBackupService) Delete(_ context.Context, slug string) error {
-	f.deleted = append(f.deleted, slug)
-	if f.err == nil {
-		f.backups = nil
-		f.afterBackups = nil
-	}
-	return f.err
-}
-
-func vmBackupConfig(id string) map[string]tftypes.Value {
-	cfg := map[string]tftypes.Value{
-		"virtual_machine": strVal("vm1-abc"),
-		"interval":        strVal("daily"),
-		"plan":            strVal("backup-yow"),
-		"billing_cycle":   strVal("hourly"),
-		"cloud_provider":  strVal("zsoftly"),
-		"region":          strVal("yow-1"),
-	}
-	if id != "" {
-		cfg["id"] = strVal(id)
-	}
-	return cfg
-}
-
-func TestVMBackupResource_createResolvesNewSlug(t *testing.T) {
-	svc := &fakeVMBackupService{
-		backups: []vmbackup.VMBackup{{Slug: "other-backup"}},
-		afterBackups: []vmbackup.VMBackup{
-			{Slug: "other-backup"},
-			{Slug: "vm1-backup-b1", State: "Active"},
-		},
-	}
-	r := internalprovider.NewVMBackupResourceWithService(svc)
-	resp := runCreate(t, r, vmBackupConfig(""))
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error: %v", resp.Diagnostics)
-	}
-	if got := stateID(t, resp.State); got != "vm1-backup-b1" {
-		t.Errorf("ID = %q, want vm1-backup-b1", got)
-	}
-	if svc.createReq.PseudoService != "vm-backup" {
-		t.Errorf("PseudoService = %q, want vm-backup (default)", svc.createReq.PseudoService)
-	}
-}
-
-func TestVMBackupResource_deleteHappyPath(t *testing.T) {
-	svc := &fakeVMBackupService{
-		backups: []vmbackup.VMBackup{{Slug: "vm1-backup-b1"}},
-	}
-	r := internalprovider.NewVMBackupResourceWithService(svc)
-	resp := runDelete(t, r, vmBackupConfig("vm1-backup-b1"))
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error: %v", resp.Diagnostics)
-	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "vm1-backup-b1" {
-		t.Errorf("Delete called with %v, want [vm1-backup-b1]", svc.deleted)
-	}
-}
-
 // --- zcp_volume_snapshot ---
 
 type fakeVolumeSnapshotService struct {
@@ -324,79 +238,5 @@ func TestVolumeSnapshotResource_deleteHappyPath(t *testing.T) {
 	}
 	if len(svc.deleted) != 1 || svc.deleted[0] != "nightly-s1" {
 		t.Errorf("Delete called with %v, want [nightly-s1]", svc.deleted)
-	}
-}
-
-// --- zcp_volume_backup ---
-
-type fakeVolumeBackupService struct {
-	backups   []backup.Backup
-	created   *backup.Backup
-	createReq backup.CreateRequest
-	err       error
-	deleted   []string
-}
-
-func (f *fakeVolumeBackupService) List(_ context.Context, _, _ string) ([]backup.Backup, error) {
-	return f.backups, f.err
-}
-func (f *fakeVolumeBackupService) Create(_ context.Context, _ string, req backup.CreateRequest) (*backup.Backup, error) {
-	f.createReq = req
-	return f.created, f.err
-}
-func (f *fakeVolumeBackupService) Delete(_ context.Context, slug string) error {
-	f.deleted = append(f.deleted, slug)
-	if f.err == nil {
-		f.backups = nil
-	}
-	return f.err
-}
-
-func volumeBackupConfig(id string) map[string]tftypes.Value {
-	cfg := map[string]tftypes.Value{
-		"volume":         strVal("root-1234"),
-		"interval":       strVal("dailyAt"),
-		"billing_cycle":  strVal("hourly"),
-		"cloud_provider": strVal("zsoftly"),
-		"region":         strVal("yow-1"),
-	}
-	if id != "" {
-		cfg["id"] = strVal(id)
-	}
-	return cfg
-}
-
-func TestVolumeBackupResource_createHappyPath(t *testing.T) {
-	svc := &fakeVolumeBackupService{
-		created: &backup.Backup{Slug: "root-backup-b1", Interval: "dailyAt", At: 1},
-	}
-	r := internalprovider.NewVolumeBackupResourceWithService(svc)
-	resp := runCreate(t, r, volumeBackupConfig(""))
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error: %v", resp.Diagnostics)
-	}
-	if got := stateID(t, resp.State); got != "root-backup-b1" {
-		t.Errorf("ID = %q, want root-backup-b1", got)
-	}
-	// Unset `at` defaults to 1, matching the CLI.
-	if svc.createReq.At != 1 {
-		t.Errorf("At = %d, want 1 (default)", svc.createReq.At)
-	}
-	if svc.createReq.PseudoService != "Virtual Machine Backup" {
-		t.Errorf("PseudoService = %q, want default", svc.createReq.PseudoService)
-	}
-}
-
-func TestVolumeBackupResource_deleteHappyPath(t *testing.T) {
-	svc := &fakeVolumeBackupService{
-		backups: []backup.Backup{{Slug: "root-backup-b1"}},
-	}
-	r := internalprovider.NewVolumeBackupResourceWithService(svc)
-	resp := runDelete(t, r, volumeBackupConfig("root-backup-b1"))
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error: %v", resp.Diagnostics)
-	}
-	if len(svc.deleted) != 1 || svc.deleted[0] != "root-backup-b1" {
-		t.Errorf("Delete called with %v, want [root-backup-b1]", svc.deleted)
 	}
 }

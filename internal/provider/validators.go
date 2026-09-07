@@ -51,37 +51,6 @@ func (v planServiceTypeValidator) ValidateString(_ context.Context, req validato
 	)
 }
 
-// stringOneOfValidator enforces that a string attribute is one of a fixed set
-// of (case-sensitive) values.
-type stringOneOfValidator struct {
-	allowed []string
-}
-
-func (v stringOneOfValidator) Description(_ context.Context) string {
-	return fmt.Sprintf("must be one of: %s", strings.Join(v.allowed, ", "))
-}
-
-func (v stringOneOfValidator) MarkdownDescription(ctx context.Context) string {
-	return v.Description(ctx)
-}
-
-func (v stringOneOfValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
-	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
-		return
-	}
-	val := req.ConfigValue.ValueString()
-	for _, a := range v.allowed {
-		if a == val {
-			return
-		}
-	}
-	resp.Diagnostics.AddAttributeError(
-		req.Path,
-		"Invalid value",
-		fmt.Sprintf("%q is not valid. Must be one of: %s.", val, strings.Join(v.allowed, ", ")),
-	)
-}
-
 // int64AtLeastValidator enforces a minimum value on an Int64 attribute.
 type int64AtLeastValidator struct {
 	min int64

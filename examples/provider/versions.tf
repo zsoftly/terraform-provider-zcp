@@ -3,7 +3,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "registry.opentofu.org/zsoftly/zcp"
-      version = "~> 0.1"
+      version = "~> 0.2.0"
     }
   }
 }

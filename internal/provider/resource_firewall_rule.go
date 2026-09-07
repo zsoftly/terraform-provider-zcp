@@ -7,14 +7,17 @@ import (
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-log/tflog"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/firewall"
+	"github.com/zsoftly/zcp-cli/pkg/api/ipaddress"
 )
 
 var _ resource.Resource = &firewallRuleResource{}
@@ -28,7 +31,9 @@ type firewallServiceIface interface {
 }
 
 type firewallRuleResource struct {
-	svc firewallServiceIface
+	svc            firewallServiceIface
+	ipSvc          publicIPLister
+	defaultProject string
 }
 
 type firewallRuleResourceModel struct {
@@ -53,7 +58,7 @@ func (r *firewallRuleResource) Metadata(_ context.Context, req resource.Metadata
 
 func (r *firewallRuleResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP firewall rule on a public IP address.",
+		MarkdownDescription: "Manages a ZCP firewall rule on a public IP address. Firewall rules do not apply to a public IP that belongs to a VPC. Use `zcp_network_acl` and `zcp_network_acl_rule` to control ingress for a VPC tier instead.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -115,6 +120,50 @@ func (r *firewallRuleResource) Configure(_ context.Context, req resource.Configu
 		return
 	}
 	r.svc = firewall.NewService(pd.Client)
+	r.ipSvc = ipaddress.NewService(pd.Client)
+	r.defaultProject = pd.DefaultProject
+}
+
+// checkNotVPCPublicIP looks up ipSlug in the account IP list and appends an
+// error diagnostic if it belongs to a VPC: the API accepts a firewall rule
+// create request on a VPC public IP but never applies it, so the create would
+// otherwise poll until timeout instead of failing. The check is best effort: a
+// lister failure or a slug that is not found in the list does not block the
+// create, since the create call's own error handling already covers a
+// genuinely invalid IP.
+func (r *firewallRuleResource) checkNotVPCPublicIP(ctx context.Context, ipSlug string, diags *diag.Diagnostics) {
+	if r.ipSvc == nil {
+		return
+	}
+	// The resource has no region/project attributes of its own, so the list
+	// call stays unscoped by region. It is scoped to the provider's default
+	// project when one is configured, and falls back to unscoped otherwise.
+	ips, err := r.ipSvc.List(ctx, "", "", r.defaultProject)
+	if err != nil {
+		tflog.Debug(ctx, "could not check whether the IP address belongs to a VPC, continuing", map[string]interface{}{
+			"ip_address": ipSlug,
+			"error":      err.Error(),
+		})
+		return
+	}
+	for _, ip := range ips {
+		if ip.Slug != ipSlug {
+			continue
+		}
+		if ip.VPCID != "" {
+			diags.AddError(
+				"Firewall rules are not supported on VPC public IPs",
+				fmt.Sprintf(
+					"IP %s belongs to a VPC. The API accepts a zcp_firewall_rule create request on a VPC public IP but never applies it, so the rule would poll until timeout instead of failing. Control ingress for a VPC tier with zcp_network_acl and zcp_network_acl_rule instead.",
+					ipSlug,
+				),
+			)
+		}
+		return
+	}
+	tflog.Debug(ctx, "IP address not found in account IP list, continuing", map[string]interface{}{
+		"ip_address": ipSlug,
+	})
 }
 
 func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -152,7 +201,13 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 		createReq.EndPort = model.EndPort.ValueString()
 	}
 
-	if _, err := r.svc.Create(ctx, model.IPAddress.ValueString(), createReq); err != nil {
+	ipSlug := model.IPAddress.ValueString()
+	r.checkNotVPCPublicIP(ctx, ipSlug, &resp.Diagnostics)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+
+	if _, err := r.svc.Create(ctx, ipSlug, createReq); err != nil {
 		resp.Diagnostics.AddError("Failed to create firewall rule", err.Error())
 		return
 	}
@@ -160,7 +215,6 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 	// Creation is asynchronous and returns no rule object (data: null), so poll
 	// the rule list and match on protocol, ports, and CIDR to recover the new
 	// rule's ID and state.
-	ipSlug := model.IPAddress.ValueString()
 	var found firewall.FirewallRule
 	if err := pollUntilReady(ctx, 5*time.Second, func(ctx context.Context) (bool, error) {
 		rules, err := r.svc.List(ctx, ipSlug)

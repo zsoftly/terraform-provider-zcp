@@ -123,6 +123,20 @@ func NewFirewallRuleResourceWithService(svc firewallServiceIface) resource.Resou
 	return &firewallRuleResource{svc: svc}
 }
 
+// NewFirewallRuleResourceWithServices additionally wires a public-IP lister,
+// used to reject firewall rules on VPC public IPs; available only in test
+// binaries.
+func NewFirewallRuleResourceWithServices(svc firewallServiceIface, ipSvc publicIPLister) resource.Resource {
+	return &firewallRuleResource{svc: svc, ipSvc: ipSvc}
+}
+
+// NewFirewallRuleResourceWithServicesAndProject additionally wires a
+// provider-level default project, used to scope the VPC public-IP guard's
+// list call; available only in test binaries.
+func NewFirewallRuleResourceWithServicesAndProject(svc firewallServiceIface, ipSvc publicIPLister, defaultProject string) resource.Resource {
+	return &firewallRuleResource{svc: svc, ipSvc: ipSvc, defaultProject: defaultProject}
+}
+
 // Test binaries shorten the post-Running private-IP wait so create tests with
 // fixtures that never report an address finish in milliseconds, not minutes.
 func init() {
@@ -252,6 +266,13 @@ func NewObjectStorageBucketResourceWithService(svc objectStorageServiceIface) re
 	return &objectStorageBucketResource{svc: svc}
 }
 
+// NewObjectStorageBucketConfigurationResourceWithService creates a bucket
+// configuration resource pre-wired with the given service; available only in
+// test binaries.
+func NewObjectStorageBucketConfigurationResourceWithService(svc objectStorageServiceIface, kind string) resource.Resource {
+	return &bucketConfigurationResource{svc: svc, kind: kind}
+}
+
 // NewVMSnapshotResourceWithService creates a vmSnapshotResource pre-wired with
 // the given service; available only in test binaries.
 func NewVMSnapshotResourceWithService(svc vmSnapshotServiceIface) resource.Resource {
@@ -259,9 +280,11 @@ func NewVMSnapshotResourceWithService(svc vmSnapshotServiceIface) resource.Resou
 }
 
 // NewVMBackupResourceWithService creates a vmBackupResource pre-wired with
-// the given service; available only in test binaries.
+// the given service; available only in test binaries. The destroy poll
+// interval is shortened so delete tests that retry past a transient error
+// finish quickly.
 func NewVMBackupResourceWithService(svc vmBackupServiceIface) resource.Resource {
-	return &vmBackupResource{svc: svc}
+	return &vmBackupResource{svc: svc, deletePollInterval: time.Millisecond}
 }
 
 // NewVolumeSnapshotResourceWithService creates a volumeSnapshotResource pre-wired
@@ -271,9 +294,11 @@ func NewVolumeSnapshotResourceWithService(svc volumeSnapshotServiceIface) resour
 }
 
 // NewVolumeBackupResourceWithService creates a volumeBackupResource pre-wired
-// with the given service; available only in test binaries.
+// with the given service; available only in test binaries. The destroy poll
+// interval is shortened so delete tests that retry past a transient error
+// finish quickly.
 func NewVolumeBackupResourceWithService(svc volumeBackupServiceIface) resource.Resource {
-	return &volumeBackupResource{svc: svc}
+	return &volumeBackupResource{svc: svc, deletePollInterval: time.Millisecond}
 }
 
 // NewAutoscaleGroupResourceWithService creates an autoscaleGroupResource
@@ -340,6 +365,25 @@ func NewRemoteAccessVPNResourceWithService(svc remoteAccessVPNServiceIface) reso
 // the given getter; available only in test binaries.
 func NewInstanceDataSourceWithGetter(g instanceGetter) datasource.DataSource {
 	return &instanceDataSource{svc: g}
+}
+
+// NewInstanceDataSourceWithServices creates an instanceDataSource pre-wired
+// with the given getter and volume lister; available only in test binaries.
+func NewInstanceDataSourceWithServices(g instanceGetter, v volumeLister) datasource.DataSource {
+	return &instanceDataSource{svc: g, volSvc: v}
+}
+
+// NewVolumeDataSourceWithLister creates a volumeDataSource pre-wired with the
+// given lister; available only in test binaries.
+func NewVolumeDataSourceWithLister(l volumeLister) datasource.DataSource {
+	return &volumeDataSource{svc: l}
+}
+
+// NewVolumeDataSourceWithListerAndProject creates a volumeDataSource pre-wired
+// with the given lister and provider default project; available only in test
+// binaries.
+func NewVolumeDataSourceWithListerAndProject(l volumeLister, defaultProject string) datasource.DataSource {
+	return &volumeDataSource{svc: l, defaultProject: defaultProject}
 }
 
 // NewPermissionsDataSourceWithLister creates a permissionsDataSource pre-wired
