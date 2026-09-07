@@ -38,13 +38,13 @@ func (f *fakeVolumeService) Create(_ context.Context, req volume.CreateRequest) 
 func (f *fakeVolumeService) List(_ context.Context, _, _ string) ([]volume.Volume, error) {
 	return f.list, nil
 }
-func (f *fakeVolumeService) Attach(_ context.Context, volumeSlug, vmSlug string) (*volume.Volume, error) {
+func (f *fakeVolumeService) Attach(_ context.Context, volumeSlug, vmSlug string) (*volume.ActionResponse, error) {
 	f.attached = append(f.attached, volumeSlug+"->"+vmSlug)
-	return f.created, f.attachErr
+	return &volume.ActionResponse{Status: "Success", Message: "Attaching block storage."}, f.attachErr
 }
-func (f *fakeVolumeService) Detach(_ context.Context, volumeSlug string) (*volume.Volume, error) {
+func (f *fakeVolumeService) Detach(_ context.Context, volumeSlug string) (*volume.ActionResponse, error) {
 	f.detached = append(f.detached, volumeSlug)
-	return f.created, f.detachErr
+	return &volume.ActionResponse{Status: "Success", Message: "Detaching block storage."}, f.detachErr
 }
 func (f *fakeVolumeService) Delete(_ context.Context, slug string) error {
 	f.deleted = append(f.deleted, slug)

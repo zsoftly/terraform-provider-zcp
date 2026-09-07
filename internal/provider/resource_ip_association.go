@@ -29,23 +29,18 @@ type ipAssociationServiceIface interface {
 	List(ctx context.Context) ([]ipaddress.IPAddress, error)
 }
 
-// ipAssociationService talks to the static-NAT endpoint directly. The released
-// CLI's EnableStaticNAT sends only {virtual_machine}, but the API requires
-// {virtual_machine, network} (it rejects the CLI body with "The network field is
-// required"), and there is no Disable in the CLI package — disable is a DELETE on
-// the same endpoint. So both calls go through the shared HTTP client.
+// ipAssociationService enables static NAT through the CLI's ipaddress service,
+// which sends {virtual_machine, network} as the API requires. There is still no
+// Disable in the CLI package — disable is a DELETE on the same endpoint — so that
+// call goes through the shared HTTP client directly.
 type ipAssociationService struct {
 	client *httpclient.Client
 	ipSvc  *ipaddress.Service
 }
 
 func (s *ipAssociationService) Enable(ctx context.Context, ipSlug, vmSlug, networkSlug string) error {
-	body := map[string]string{"virtual_machine": vmSlug, "network": networkSlug}
-	var resp struct {
-		Status  string `json:"status"`
-		Message string `json:"message"`
-	}
-	if err := s.client.Post(ctx, "/ipaddresses/"+ipSlug+"/static-nat", body, &resp); err != nil {
+	resp, err := s.ipSvc.EnableStaticNAT(ctx, ipSlug, vmSlug, networkSlug)
+	if err != nil {
 		return err
 	}
 	if resp.Status != "" && !strings.EqualFold(resp.Status, "Success") {
