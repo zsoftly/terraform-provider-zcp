@@ -13,6 +13,8 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/objectstorage"
+	"github.com/zsoftly/zcp-cli/pkg/api/plan"
+	"github.com/zsoftly/zcp-cli/pkg/api/storagecategory"
 )
 
 var _ resource.Resource = &objectStorageResource{}
@@ -45,8 +47,10 @@ type objectStorageServiceIface interface {
 }
 
 type objectStorageResource struct {
-	svc            objectStorageServiceIface
-	defaultProject string
+	svc                objectStorageServiceIface
+	planSvc            planLister
+	storageCategorySvc storageCategoryLister
+	defaultProject     string
 }
 
 type objectStorageResourceModel struct {
@@ -121,7 +125,7 @@ func (r *objectStorageResource) Schema(ctx context.Context, _ resource.SchemaReq
 			},
 			"size_gb": schema.Int64Attribute{
 				Optional:            true,
-				MarkdownDescription: "Custom store size in GB. Exactly one of `plan` or `size_gb` must be set. Increasing it resizes the store in place.",
+				MarkdownDescription: "Requested store size in GB. On create, the provider resolves this to an active Object Storage catalogue plan for the selected region and storage category. Exactly one of `plan` or `size_gb` must be set. Increasing it resizes the store in place.",
 			},
 			"status": schema.StringAttribute{
 				Computed:            true,
@@ -162,6 +166,8 @@ func (r *objectStorageResource) Configure(_ context.Context, req resource.Config
 		return
 	}
 	r.svc = objectstorage.NewService(pd.Client)
+	r.planSvc = plan.NewService(pd.Client)
+	r.storageCategorySvc = storagecategory.NewService(pd.Client)
 	r.defaultProject = pd.DefaultProject
 }
 
@@ -182,7 +188,7 @@ func (r *objectStorageResource) ValidateConfig(ctx context.Context, req resource
 	if planSet == sizeSet {
 		resp.Diagnostics.AddError(
 			"Invalid plan configuration",
-			"Set exactly one of `plan` (catalogue plan) or `size_gb` (custom size).",
+			"Set exactly one of `plan` (catalogue plan) or `size_gb` (requested size).",
 		)
 	}
 }
@@ -243,7 +249,12 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 	if !model.Plan.IsNull() && !model.Plan.IsUnknown() {
 		createReq.Plan = model.Plan.ValueString()
 	} else {
-		createReq.CustomPlan = &objectstorage.CustomPlan{Storage: int(model.SizeGB.ValueInt64())}
+		resolvedPlan, err := r.resolveObjectStoragePlan(ctx, model.Region.ValueString(), model.StorageCategory.ValueString(), model.SizeGB.ValueInt64())
+		if err != nil {
+			resp.Diagnostics.AddError("No matching object storage plan", err.Error())
+			return
+		}
+		createReq.Plan = resolvedPlan
 	}
 
 	store, err := r.svc.Create(ctx, createReq)
@@ -267,6 +278,47 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 
 	applyStoreState(&model, store)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+func (r *objectStorageResource) resolveObjectStoragePlan(ctx context.Context, region, storageCategorySlug string, sizeGB int64) (string, error) {
+	if r.planSvc == nil || r.storageCategorySvc == nil {
+		return "", fmt.Errorf("cannot resolve size_gb: provider plan lookup services are not configured")
+	}
+
+	categories, err := r.storageCategorySvc.List(ctx, region)
+	if err != nil {
+		return "", err
+	}
+
+	var categoryID string
+	for _, category := range categories {
+		if category.Slug == storageCategorySlug && category.Status {
+			categoryID = category.ID
+			break
+		}
+	}
+	if categoryID == "" {
+		return "", fmt.Errorf("no active storage category %q exists in region %q", storageCategorySlug, region)
+	}
+
+	plans, err := r.planSvc.List(ctx, plan.ServiceObjectStorage, region)
+	if err != nil {
+		return "", err
+	}
+	for _, p := range plans {
+		if !p.Status || p.StorageCategoryID != categoryID {
+			continue
+		}
+		storage, err := p.Attribute.Storage.Int64()
+		if err != nil {
+			return "", fmt.Errorf("object storage plan %q has invalid storage value %q: %w", p.Slug, p.Attribute.Storage, err)
+		}
+		if storage == sizeGB {
+			return p.Slug, nil
+		}
+	}
+
+	return "", fmt.Errorf("no active Object Storage plan for %d GB in region %q with storage category %q; set plan explicitly or choose an available catalogue size", sizeGB, region, storageCategorySlug)
 }
 
 // firstNonEmpty returns a when non-empty, else b.
@@ -300,7 +352,7 @@ func (r *objectStorageResource) Read(ctx context.Context, req resource.ReadReque
 
 	model.Name = types.StringValue(store.Name)
 	applyStoreState(&model, store)
-	// size_gb tracks the API-reported size for custom stores so out-of-band
+	// size_gb tracks the API-reported size for size-based stores so out-of-band
 	// resizes surface as drift; plan-based stores keep size_gb null.
 	if !model.SizeGB.IsNull() && !model.Size.IsNull() {
 		model.SizeGB = model.Size
