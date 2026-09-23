@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -250,6 +251,41 @@ func objectStorageRawWithPlan(t *testing.T, schResp resource.SchemaResponse, id 
 	})
 }
 
+func testObjectStoragePlan(slug string, storage json.Number, storageCategoryID string) plan.Plan {
+	return plan.Plan{
+		Slug:              slug,
+		Status:            true,
+		StorageCategoryID: storageCategoryID,
+		Attribute:         plan.Attribute{Storage: storage},
+		Prices: []plan.Price{
+			{BillingCycle: plan.BillingCycle{Slug: "hourly", IsEnabled: true}},
+		},
+	}
+}
+
+func createObjectStorageWithSize(t *testing.T, svc *fakeObjectStorageService, planSvc *fakeObjectStoragePlanLister, storageCategorySvc *fakeObjectStorageCategoryLister, size int64) *resource.CreateResponse {
+	t.Helper()
+	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, storageCategorySvc)
+	schResp := objectStorageSchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	createReq := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: objectStorageRaw(t, schResp, "", &size, nil)},
+	}
+	createResp := &resource.CreateResponse{
+		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)},
+	}
+	r.Create(context.Background(), createReq, createResp)
+	return createResp
+}
+
+func defaultObjectStorageCategoryLister() *fakeObjectStorageCategoryLister {
+	return &fakeObjectStorageCategoryLister{
+		categories: []storagecategory.StorageCategory{
+			{ID: "sc-nvme", Slug: "nvme", Status: true},
+		},
+	}
+}
+
 func TestObjectStorageResource_createHappyPath(t *testing.T) {
 	svc := &fakeObjectStorageService{
 		created: &objectstorage.ObjectStorage{
@@ -263,19 +299,10 @@ func TestObjectStorageResource_createHappyPath(t *testing.T) {
 	}
 	planSvc := &fakeObjectStoragePlanLister{
 		plans: []plan.Plan{
-			{
-				Slug:              "o1100g",
-				Status:            true,
-				StorageCategoryID: "sc-nvme",
-				Attribute:         plan.Attribute{Storage: json.Number("100")},
-			},
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
 		},
 	}
-	storageCategorySvc := &fakeObjectStorageCategoryLister{
-		categories: []storagecategory.StorageCategory{
-			{ID: "sc-nvme", Slug: "nvme", Status: true},
-		},
-	}
+	storageCategorySvc := defaultObjectStorageCategoryLister()
 	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, storageCategorySvc)
 	schResp := objectStorageSchema(t)
 	tfType := schResp.Schema.Type().TerraformType(context.Background())
@@ -357,32 +384,132 @@ func TestObjectStorageResource_createWithSizeGBFailsBeforeCreateWhenNoPlanMatche
 	svc := &fakeObjectStorageService{}
 	planSvc := &fakeObjectStoragePlanLister{
 		plans: []plan.Plan{
-			{
-				Slug:              "o1200g",
-				Status:            true,
-				StorageCategoryID: "sc-nvme",
-				Attribute:         plan.Attribute{Storage: json.Number("200")},
-			},
+			testObjectStoragePlan("o1200g", json.Number("200"), "sc-nvme"),
 		},
 	}
-	storageCategorySvc := &fakeObjectStorageCategoryLister{
-		categories: []storagecategory.StorageCategory{
-			{ID: "sc-nvme", Slug: "nvme", Status: true},
-		},
-	}
-	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, storageCategorySvc)
-	schResp := objectStorageSchema(t)
-	tfType := schResp.Schema.Type().TerraformType(context.Background())
-	size := int64(100)
-	createReq := resource.CreateRequest{
-		Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: objectStorageRaw(t, schResp, "", &size, nil)},
-	}
-	createResp := &resource.CreateResponse{
-		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)},
-	}
-	r.Create(context.Background(), createReq, createResp)
+	createResp := createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
 	if !createResp.Diagnostics.HasError() {
 		t.Fatal("expected missing plan diagnostic, got none")
+	}
+	if svc.createdReq != nil {
+		t.Fatalf("Create was called with %#v, want no API create", svc.createdReq)
+	}
+}
+
+func TestObjectStorageResource_createWithSizeGBSkipsCustomPlan(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		created: &objectstorage.ObjectStorage{Slug: "assets-x1", Name: "assets", Status: "Active", Size: "100"},
+	}
+	customPlan := testObjectStoragePlan("custom-100g", json.Number("100"), "sc-nvme")
+	customPlan.IsCustom = true
+	planSvc := &fakeObjectStoragePlanLister{
+		plans: []plan.Plan{
+			customPlan,
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
+		},
+	}
+	createResp := createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createdReq == nil || svc.createdReq.Plan != "o1100g" {
+		t.Fatalf("Create plan = %#v, want o1100g", svc.createdReq)
+	}
+}
+
+func TestObjectStorageResource_createWithSizeGBSkipsBillingCycleMismatch(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		created: &objectstorage.ObjectStorage{Slug: "assets-x1", Name: "assets", Status: "Active", Size: "100"},
+	}
+	monthlyOnly := testObjectStoragePlan("o1monthly100g", json.Number("100"), "sc-nvme")
+	monthlyOnly.Prices = []plan.Price{
+		{BillingCycle: plan.BillingCycle{Slug: "monthly", IsEnabled: true}},
+	}
+	disabledHourly := testObjectStoragePlan("o1disabled100g", json.Number("100"), "sc-nvme")
+	disabledHourly.Prices = []plan.Price{
+		{BillingCycle: plan.BillingCycle{Slug: "hourly", IsEnabled: false}},
+	}
+	planSvc := &fakeObjectStoragePlanLister{
+		plans: []plan.Plan{
+			monthlyOnly,
+			disabledHourly,
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
+		},
+	}
+	createResp := createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createdReq == nil || svc.createdReq.Plan != "o1100g" {
+		t.Fatalf("Create plan = %#v, want o1100g", svc.createdReq)
+	}
+}
+
+func TestObjectStorageResource_createWithSizeGBSkipsMalformedStorage(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		created: &objectstorage.ObjectStorage{Slug: "assets-x1", Name: "assets", Status: "Active", Size: "100"},
+	}
+	planSvc := &fakeObjectStoragePlanLister{
+		plans: []plan.Plan{
+			testObjectStoragePlan("bad-storage", json.Number("not-a-number"), "sc-nvme"),
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
+		},
+	}
+	createResp := createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createdReq == nil || svc.createdReq.Plan != "o1100g" {
+		t.Fatalf("Create plan = %#v, want o1100g", svc.createdReq)
+	}
+}
+
+func TestObjectStorageResource_createWithSizeGBSkipsInactivePlansAndCategories(t *testing.T) {
+	svc := &fakeObjectStorageService{}
+	inactivePlan := testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme")
+	inactivePlan.Status = false
+	planSvc := &fakeObjectStoragePlanLister{plans: []plan.Plan{inactivePlan}}
+	createResp := createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected missing plan diagnostic for inactive plan, got none")
+	}
+	if svc.createdReq != nil {
+		t.Fatalf("Create was called with %#v, want no API create", svc.createdReq)
+	}
+
+	svc = &fakeObjectStorageService{}
+	planSvc = &fakeObjectStoragePlanLister{plans: []plan.Plan{testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme")}}
+	inactiveCategorySvc := &fakeObjectStorageCategoryLister{
+		categories: []storagecategory.StorageCategory{
+			{ID: "sc-nvme", Slug: "nvme", Status: false},
+		},
+	}
+	createResp = createObjectStorageWithSize(t, svc, planSvc, inactiveCategorySvc, 100)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected missing category diagnostic for inactive category, got none")
+	}
+	if svc.createdReq != nil {
+		t.Fatalf("Create was called with %#v, want no API create", svc.createdReq)
+	}
+}
+
+func TestObjectStorageResource_createWithSizeGBReportsLookupErrors(t *testing.T) {
+	svc := &fakeObjectStorageService{}
+	planSvc := &fakeObjectStoragePlanLister{plans: []plan.Plan{testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme")}}
+	categorySvc := &fakeObjectStorageCategoryLister{err: errors.New("category list failed")}
+	createResp := createObjectStorageWithSize(t, svc, planSvc, categorySvc, 100)
+	if !createResp.Diagnostics.HasError() || !strings.Contains(createResp.Diagnostics[0].Detail(), "category list failed") {
+		t.Fatalf("category lookup diagnostics = %v, want category list failed", createResp.Diagnostics)
+	}
+	if svc.createdReq != nil {
+		t.Fatalf("Create was called with %#v, want no API create", svc.createdReq)
+	}
+
+	svc = &fakeObjectStorageService{}
+	planSvc = &fakeObjectStoragePlanLister{err: errors.New("plan list failed")}
+	createResp = createObjectStorageWithSize(t, svc, planSvc, defaultObjectStorageCategoryLister(), 100)
+	if !createResp.Diagnostics.HasError() || !strings.Contains(createResp.Diagnostics[0].Detail(), "plan list failed") {
+		t.Fatalf("plan lookup diagnostics = %v, want plan list failed", createResp.Diagnostics)
 	}
 	if svc.createdReq != nil {
 		t.Fatalf("Create was called with %#v, want no API create", svc.createdReq)
@@ -393,20 +520,10 @@ func TestObjectStorageResource_createServiceError(t *testing.T) {
 	svc := &fakeObjectStorageService{err: errors.New("quota exceeded")}
 	planSvc := &fakeObjectStoragePlanLister{
 		plans: []plan.Plan{
-			{
-				Slug:              "o1100g",
-				Status:            true,
-				StorageCategoryID: "sc-nvme",
-				Attribute:         plan.Attribute{Storage: json.Number("100")},
-			},
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
 		},
 	}
-	storageCategorySvc := &fakeObjectStorageCategoryLister{
-		categories: []storagecategory.StorageCategory{
-			{ID: "sc-nvme", Slug: "nvme", Status: true},
-		},
-	}
-	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, storageCategorySvc)
+	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, defaultObjectStorageCategoryLister())
 	schResp := objectStorageSchema(t)
 	tfType := schResp.Schema.Type().TerraformType(context.Background())
 	size := int64(100)

@@ -249,7 +249,7 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 	if !model.Plan.IsNull() && !model.Plan.IsUnknown() {
 		createReq.Plan = model.Plan.ValueString()
 	} else {
-		resolvedPlan, err := r.resolveObjectStoragePlan(ctx, model.Region.ValueString(), model.StorageCategory.ValueString(), model.SizeGB.ValueInt64())
+		resolvedPlan, err := r.resolveObjectStoragePlan(ctx, model.Region.ValueString(), model.StorageCategory.ValueString(), model.BillingCycle.ValueString(), model.SizeGB.ValueInt64())
 		if err != nil {
 			resp.Diagnostics.AddError("No matching object storage plan", err.Error())
 			return
@@ -280,7 +280,7 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
-func (r *objectStorageResource) resolveObjectStoragePlan(ctx context.Context, region, storageCategorySlug string, sizeGB int64) (string, error) {
+func (r *objectStorageResource) resolveObjectStoragePlan(ctx context.Context, region, storageCategorySlug, billingCycle string, sizeGB int64) (string, error) {
 	if r.planSvc == nil || r.storageCategorySvc == nil {
 		return "", fmt.Errorf("cannot resolve size_gb: provider plan lookup services are not configured")
 	}
@@ -306,19 +306,28 @@ func (r *objectStorageResource) resolveObjectStoragePlan(ctx context.Context, re
 		return "", err
 	}
 	for _, p := range plans {
-		if !p.Status || p.StorageCategoryID != categoryID {
+		if !p.Status || p.IsCustom || p.StorageCategoryID != categoryID || !planSupportsBillingCycle(p, billingCycle) {
 			continue
 		}
 		storage, err := p.Attribute.Storage.Int64()
 		if err != nil {
-			return "", fmt.Errorf("object storage plan %q has invalid storage value %q: %w", p.Slug, p.Attribute.Storage, err)
+			continue
 		}
 		if storage == sizeGB {
 			return p.Slug, nil
 		}
 	}
 
-	return "", fmt.Errorf("no active Object Storage plan for %d GB in region %q with storage category %q; set plan explicitly or choose an available catalogue size", sizeGB, region, storageCategorySlug)
+	return "", fmt.Errorf("no active Object Storage catalogue plan for %d GB in region %q with storage category %q and billing cycle %q; set plan explicitly or choose an available catalogue size", sizeGB, region, storageCategorySlug, billingCycle)
+}
+
+func planSupportsBillingCycle(p plan.Plan, billingCycle string) bool {
+	for _, price := range p.Prices {
+		if price.BillingCycle.Slug == billingCycle && price.BillingCycle.IsEnabled {
+			return true
+		}
+	}
+	return false
 }
 
 // firstNonEmpty returns a when non-empty, else b.
