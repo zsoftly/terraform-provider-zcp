@@ -59,8 +59,10 @@ terraform import zcp_object_storage.assets assets-x1/zsoftly/yow-1/hourly/nvme
   if omitted. Changing this forces replacement.
 - `plan` (String) Catalogue plan slug. Exactly one of `plan` or `size_gb` must
   be set. Changing this forces replacement.
-- `size_gb` (Number) Custom store size in GB. Exactly one of `plan` or `size_gb`
-  must be set. Increasing it resizes the store in place.
+- `size_gb` (Number) Requested store size in GB. On create, the provider
+  resolves this to an active Object Storage catalogue plan for the selected
+  region and storage category. Exactly one of `plan` or `size_gb` must be set.
+  Increasing it resizes the store in place.
 - `timeouts` (Block) Configurable `create`, `update`, and `delete` timeouts.
 
 ### Read-Only
