@@ -42,7 +42,9 @@ type fakeObjectStorageService struct {
 	keys           []objectstorage.Key
 	createdKey     *objectstorage.Key
 	deletedKeys    []string
+	deleteKeyErr   error
 	credentials    *objectstorage.Credentials
+	credentialsErr error
 }
 
 type fakeLifecycleRequest struct {
@@ -122,9 +124,15 @@ func (f *fakeObjectStorageService) CreateKey(_ context.Context, _ string) (*obje
 }
 func (f *fakeObjectStorageService) DeleteKey(_ context.Context, _, keyID string) error {
 	f.deletedKeys = append(f.deletedKeys, keyID)
+	if f.deleteKeyErr != nil {
+		return f.deleteKeyErr
+	}
 	return f.err
 }
 func (f *fakeObjectStorageService) GetCredentialsForKey(_ context.Context, _, _ string) (*objectstorage.Credentials, error) {
+	if f.credentialsErr != nil {
+		return nil, f.credentialsErr
+	}
 	return f.credentials, f.err
 }
 func (f *fakeObjectStorageService) GetBucket(_ context.Context, _, _ string) (*objectstorage.Bucket, error) {
@@ -349,6 +357,53 @@ func TestObjectStorageKeyResource_createFetchesVisibleSecret(t *testing.T) {
 	}
 	if got.APISecret.ValueString() != "secret-1" {
 		t.Fatalf("APISecret = %q, want fetched secret", got.APISecret.ValueString())
+	}
+}
+
+func TestObjectStorageKeyResource_createRevokesKeyWhenSecretUnavailable(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey:     &objectstorage.Key{ID: "key-1", APIKey: "access-1", Status: "active"},
+		credentialsErr: errors.New("secret expired"),
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected error when plaintext secret is unavailable")
+	}
+	if len(svc.deletedKeys) != 1 || svc.deletedKeys[0] != "key-1" {
+		t.Fatalf("deletedKeys = %v, want [key-1]", svc.deletedKeys)
+	}
+}
+
+func TestObjectStorageKeyResource_createWarnsWhenSecretFailureCleanupFails(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey:     &objectstorage.Key{ID: "key-1", APIKey: "access-1", Status: "active"},
+		credentialsErr: errors.New("secret expired"),
+		deleteKeyErr:   errors.New("delete failed"),
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected error when plaintext secret is unavailable")
+	}
+	warned := false
+	for _, d := range createResp.Diagnostics.Warnings() {
+		if strings.Contains(d.Summary(), "cleanup failed") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("diagnostics = %v, want cleanup warning", createResp.Diagnostics)
 	}
 }
 

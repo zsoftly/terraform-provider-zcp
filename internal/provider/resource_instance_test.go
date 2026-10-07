@@ -730,6 +730,32 @@ func TestInstanceResource_validateCustomPlanAccepted(t *testing.T) {
 	}
 }
 
+func TestInstanceResource_validateUnknownPlanConfigurationDefers(t *testing.T) {
+	tests := map[string]func(map[string]tftypes.Value){
+		"unknown plan with custom cpu": func(vals map[string]tftypes.Value) {
+			vals["plan"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+			vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+		},
+		"unknown custom inputs without plan": func(vals map[string]tftypes.Value) {
+			vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+			vals["cpu"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+			vals["memory_gb"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+			vals["disk_gb"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+		},
+	}
+	for name, mutate := range tests {
+		t.Run(name, func(t *testing.T) {
+			vals := instanceValues(t, "")
+			vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+			mutate(vals)
+			resp := validateInstanceConfig(t, vals)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected error for unknown plan configuration: %v", resp.Diagnostics)
+			}
+		})
+	}
+}
+
 func TestInstanceResource_validatePlanOrCustomPlanRequired(t *testing.T) {
 	vals := instanceValues(t, "")
 	vals["plan"] = tftypes.NewValue(tftypes.String, nil)
@@ -1005,6 +1031,77 @@ func TestInstanceResource_networkTypeNoReplaceOnUpgrade(t *testing.T) {
 	}
 	if !planResp.PlanValue.IsNull() {
 		t.Errorf("PlanValue = %#v, want null (omitting network_type must not resolve to a value at plan time)", planResp.PlanValue)
+	}
+}
+
+func TestInstanceResource_billingCycleRequiresReplaceForCustomPlan(t *testing.T) {
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+
+	stateVals := instanceValues(t, "vm1-abc")
+	stateVals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	stateVals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	stateVals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	stateVals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(50))
+	stateVals["billing_cycle"] = tftypes.NewValue(tftypes.String, "hourly")
+
+	planVals := instanceValues(t, "vm1-abc")
+	planVals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	planVals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	planVals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	planVals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(50))
+	planVals["billing_cycle"] = tftypes.NewValue(tftypes.String, "monthly")
+
+	attribute, ok := schResp.Schema.Attributes["billing_cycle"].(rschema.StringAttribute)
+	if !ok {
+		t.Fatal("billing_cycle is not a schema.StringAttribute")
+	}
+	req := planmodifier.StringRequest{
+		Path:        path.Root("billing_cycle"),
+		State:       tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateVals)},
+		Plan:        tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, planVals)},
+		ConfigValue: types.StringValue("monthly"),
+		StateValue:  types.StringValue("hourly"),
+		PlanValue:   types.StringValue("monthly"),
+	}
+	planResp := planmodifier.StringResponse{PlanValue: req.PlanValue}
+	for _, m := range attribute.PlanModifiers {
+		m.PlanModifyString(context.Background(), req, &planResp)
+	}
+	if !planResp.RequiresReplace {
+		t.Fatal("billing_cycle change on custom-plan instance did not require replacement")
+	}
+}
+
+func TestInstanceResource_billingCycleDoesNotRequireReplaceForFixedPlan(t *testing.T) {
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+
+	stateVals := instanceValues(t, "vm1-abc")
+	stateVals["plan"] = tftypes.NewValue(tftypes.String, "ci1.small")
+	stateVals["billing_cycle"] = tftypes.NewValue(tftypes.String, "hourly")
+	planVals := instanceValues(t, "vm1-abc")
+	planVals["plan"] = tftypes.NewValue(tftypes.String, "ci1.small")
+	planVals["billing_cycle"] = tftypes.NewValue(tftypes.String, "monthly")
+
+	attribute, ok := schResp.Schema.Attributes["billing_cycle"].(rschema.StringAttribute)
+	if !ok {
+		t.Fatal("billing_cycle is not a schema.StringAttribute")
+	}
+	req := planmodifier.StringRequest{
+		Path:        path.Root("billing_cycle"),
+		State:       tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateVals)},
+		Plan:        tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, planVals)},
+		ConfigValue: types.StringValue("monthly"),
+		StateValue:  types.StringValue("hourly"),
+		PlanValue:   types.StringValue("monthly"),
+	}
+	planResp := planmodifier.StringResponse{PlanValue: req.PlanValue}
+	for _, m := range attribute.PlanModifiers {
+		m.PlanModifyString(context.Background(), req, &planResp)
+	}
+	if planResp.RequiresReplace {
+		t.Fatal("billing_cycle change on fixed-plan instance required replacement")
 	}
 }
 

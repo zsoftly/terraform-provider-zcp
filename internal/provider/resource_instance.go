@@ -157,7 +157,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`, `billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, and `template` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a resize requires it.",
+		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, fixed-plan `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, `template`, custom plan inputs, and custom-plan `billing_cycle` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a fixed-plan resize requires it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -204,7 +204,14 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan`.",
+				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan` for fixed-plan instances. Changing this on a custom-plan instance forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIf(
+						billingCycleRequiresReplaceForCustomPlan,
+						"Changing billing_cycle on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
+						"Changing `billing_cycle` on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
+					),
+				},
 			},
 			"project": schema.StringAttribute{
 				Optional:            true,
@@ -580,13 +587,25 @@ const (
 )
 
 func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
-	planSet := !model.Plan.IsNull()
-	cpuSet := !model.CPU.IsNull()
-	memorySet := !model.MemoryGB.IsNull()
-	diskSet := !model.DiskGB.IsNull()
+	planUnknown := model.Plan.IsUnknown()
+	cpuUnknown := model.CPU.IsUnknown()
+	memoryUnknown := model.MemoryGB.IsUnknown()
+	diskUnknown := model.DiskGB.IsUnknown()
+	unknownAny := planUnknown || cpuUnknown || memoryUnknown || diskUnknown
+
+	planSet := !model.Plan.IsNull() && !planUnknown
+	cpuSet := !model.CPU.IsNull() && !cpuUnknown
+	memorySet := !model.MemoryGB.IsNull() && !memoryUnknown
+	diskSet := !model.DiskGB.IsNull() && !diskUnknown
 	customAny := cpuSet || memorySet || diskSet
 	customComplete := cpuSet && memorySet && diskSet
 
+	if customAny {
+		validateKnownCustomInstancePlanValues(model, resp)
+	}
+	if unknownAny {
+		return
+	}
 	if planSet && customAny {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("plan"),
@@ -614,14 +633,17 @@ func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.Val
 	if !customAny {
 		return
 	}
-	if !model.CPU.IsUnknown() && model.CPU.ValueInt64() < customPlanCPUMin {
+}
+
+func validateKnownCustomInstancePlanValues(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
+	if !model.CPU.IsNull() && !model.CPU.IsUnknown() && model.CPU.ValueInt64() < customPlanCPUMin {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("cpu"),
 			"Invalid custom instance CPU",
 			fmt.Sprintf("`cpu` must be at least %d vCPU.", customPlanCPUMin),
 		)
 	}
-	if !model.MemoryGB.IsUnknown() {
+	if !model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() {
 		switch memory := model.MemoryGB.ValueInt64(); {
 		case memory <= 0:
 			resp.Diagnostics.AddAttributeError(
@@ -637,13 +659,29 @@ func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.Val
 			)
 		}
 	}
-	if !model.DiskGB.IsUnknown() && model.DiskGB.ValueInt64() <= 0 {
+	if !model.DiskGB.IsNull() && !model.DiskGB.IsUnknown() && model.DiskGB.ValueInt64() <= 0 {
 		resp.Diagnostics.AddAttributeError(
 			path.Root("disk_gb"),
 			"Invalid custom instance disk",
 			"`disk_gb` must be greater than 0 GB.",
 		)
 	}
+}
+
+func billingCycleRequiresReplaceForCustomPlan(ctx context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+	var state instanceResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.RequiresReplace = isCustomInstancePlan(&state)
+}
+
+func isCustomInstancePlan(model *instanceResourceModel) bool {
+	return (model.Plan.IsNull() || model.Plan.IsUnknown()) &&
+		!model.CPU.IsNull() && !model.CPU.IsUnknown() &&
+		!model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() &&
+		!model.DiskGB.IsNull() && !model.DiskGB.IsUnknown()
 }
 
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

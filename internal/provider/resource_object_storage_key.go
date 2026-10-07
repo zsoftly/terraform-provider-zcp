@@ -152,12 +152,24 @@ func (r *objectStorageKeyResource) Create(ctx context.Context, req resource.Crea
 		}
 	}
 	if key.APISecret == "" || objectstorage.IsEncryptedSecret(key.APISecret) {
-		resp.Diagnostics.AddError("Object storage key secret not visible", "the key was created, but the API did not return a plaintext secret. Delete the key in ZCP before retrying so Terraform can store the secret in state.")
+		r.cleanupCreatedKeyAfterSecretFailure(model.ObjectStorage.ValueString(), key.ID, resp)
+		resp.Diagnostics.AddError("Object storage key secret not visible", "the key was created, but the API did not return a plaintext secret. Terraform attempted to revoke the new key before returning this error. If cleanup failed, revoke the key in ZCP before retrying so Terraform can store the secret in state.")
 		return
 	}
 
 	applyObjectStorageKeyState(&model, key, false)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+func (r *objectStorageKeyResource) cleanupCreatedKeyAfterSecretFailure(objectStorage, keyID string, resp *resource.CreateResponse) {
+	cleanupCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if err := r.svc.DeleteKey(cleanupCtx, objectStorage, keyID); err != nil {
+		resp.Diagnostics.AddWarning(
+			"Object storage key cleanup failed",
+			fmt.Sprintf("The key %q was created, but Terraform could not capture a plaintext secret and failed to revoke the key automatically: %s. Revoke it in ZCP before retrying.", keyID, err),
+		)
+	}
 }
 
 func (r *objectStorageKeyResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

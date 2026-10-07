@@ -24,7 +24,9 @@ model:
 
 Set either a fixed catalogue `plan`, or omit `plan` and set all custom VM plan
 inputs: `cpu`, `memory_gb`, and `disk_gb`. Custom memory and disk values are in
-GB, matching the ZCP API and CLI.
+GB, matching the ZCP API and CLI. A `billing_cycle` change updates fixed-plan
+instances in place, but forces replacement for custom-plan instances because the
+current change-plan API accepts only catalogue plan slugs.
 
 **Networking.** `network_type` selects the network model. Leave it unset for
 `Isolated`, or set `L2` for a plain network, or `Vpc` for a network behind a
@@ -202,7 +204,8 @@ the IPs come from the subsequent read.
 - `template` (String) Template (OS image) slug. See `data.zcp_template`.
   Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Updated in
-  place together with `plan`.
+  place together with `plan` for fixed-plan instances. Changing this on a
+  custom-plan instance forces replacement.
 
 ### Optional
 
