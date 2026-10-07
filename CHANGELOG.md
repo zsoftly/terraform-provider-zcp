@@ -5,6 +5,25 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **`zcp_instance` supports custom VM plans.** Use `cpu`, `memory_gb`, and
+  `disk_gb` together instead of `plan` when provisioning a custom instance.
+  Fixed catalogue plans continue to use `plan`.
+- **New `zcp_object_storage_key` resource.** Terraform can create, import, and
+  revoke S3 access keys for an object storage store. The secret is stored in
+  Terraform state after create and preserved on refresh after API secret
+  visibility expires.
+
+### Changed
+
+- **Upgraded the zcp-cli SDK from v0.0.29 to v0.0.30.** Object storage reads now
+  support the current API storage-size shape and bucket configuration resources
+  use explicit S3 credentials from `ZCP_S3_ACCESS_KEY` and
+  `ZCP_S3_SECRET_KEY`.
+
 ## [v0.2.0] - 2026-09-07
 
 ### Added

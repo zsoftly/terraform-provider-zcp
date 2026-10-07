@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -119,6 +121,9 @@ type instanceResourceModel struct {
 	Region          types.String `tfsdk:"region"`
 	Template        types.String `tfsdk:"template"`
 	Plan            types.String `tfsdk:"plan"`
+	CPU             types.Int64  `tfsdk:"cpu"`
+	MemoryGB        types.Int64  `tfsdk:"memory_gb"`
+	DiskGB          types.Int64  `tfsdk:"disk_gb"`
 	BillingCycle    types.String `tfsdk:"billing_cycle"`
 	Project         types.String `tfsdk:"project"`
 	SSHKey          types.String `tfsdk:"ssh_key"`
@@ -179,8 +184,23 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				PlanModifiers:       requiresReplace,
 			},
 			"plan": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Compute plan slug. Run `zcp plan vm` to list available plans. Updated in place (resize) via the change-plan operation.",
+				Optional:            true,
+				MarkdownDescription: "Compute plan slug. Run `zcp plan vm` to list available plans. Exactly one of `plan` or the complete custom plan inputs (`cpu`, `memory_gb`, and `disk_gb`) must be set. Updated in place (resize) via the change-plan operation.",
+			},
+			"cpu": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Number of vCPUs for a custom VM plan. Must be set together with `memory_gb` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
+			"memory_gb": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "RAM in GB for a custom VM plan. Must be greater than 0 and no more than 256 GB. Must be set together with `cpu` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
+			"disk_gb": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Root disk size in GB for a custom VM plan. Must be greater than 0. Must be set together with `cpu` and `memory_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
@@ -387,6 +407,8 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	validateInstancePlanConfig(&model, resp)
+
 	networkSet := !model.Network.IsNull() && !model.Network.IsUnknown()
 	networksKnown := !model.Networks.IsNull() && !model.Networks.IsUnknown()
 	planSet := !model.NetworkPlan.IsNull() && !model.NetworkPlan.IsUnknown()
@@ -552,6 +574,78 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 }
 
+const (
+	customPlanCPUMin      = int64(2)
+	customPlanMemoryMaxGB = int64(256)
+)
+
+func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
+	planSet := !model.Plan.IsNull()
+	cpuSet := !model.CPU.IsNull()
+	memorySet := !model.MemoryGB.IsNull()
+	diskSet := !model.DiskGB.IsNull()
+	customAny := cpuSet || memorySet || diskSet
+	customComplete := cpuSet && memorySet && diskSet
+
+	if planSet && customAny {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("plan"),
+			"Conflicting instance plan configuration",
+			"`plan` cannot be used with `cpu`, `memory_gb`, or `disk_gb`. Omit `plan` to create a custom VM plan.",
+		)
+		return
+	}
+	if !planSet && !customComplete {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("plan"),
+			"Missing instance plan configuration",
+			"Set `plan`, or set all custom VM plan inputs: `cpu`, `memory_gb`, and `disk_gb`.",
+		)
+		return
+	}
+	if customAny && !customComplete {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cpu"),
+			"Incomplete custom instance plan",
+			"`cpu`, `memory_gb`, and `disk_gb` must all be set for a custom VM plan.",
+		)
+		return
+	}
+	if !customAny {
+		return
+	}
+	if !model.CPU.IsUnknown() && model.CPU.ValueInt64() < customPlanCPUMin {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cpu"),
+			"Invalid custom instance CPU",
+			fmt.Sprintf("`cpu` must be at least %d vCPU.", customPlanCPUMin),
+		)
+	}
+	if !model.MemoryGB.IsUnknown() {
+		switch memory := model.MemoryGB.ValueInt64(); {
+		case memory <= 0:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("memory_gb"),
+				"Invalid custom instance memory",
+				"`memory_gb` must be greater than 0 GB.",
+			)
+		case memory > customPlanMemoryMaxGB:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("memory_gb"),
+				"Invalid custom instance memory",
+				fmt.Sprintf("`memory_gb` must be less than or equal to %d GB.", customPlanMemoryMaxGB),
+			)
+		}
+	}
+	if !model.DiskGB.IsUnknown() && model.DiskGB.ValueInt64() <= 0 {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("disk_gb"),
+			"Invalid custom instance disk",
+			"`disk_gb` must be greater than 0 GB.",
+		)
+	}
+}
+
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var model instanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
@@ -614,6 +708,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Networks:        networks,
 		BillingCycle:    model.BillingCycle.ValueString(),
 		Plan:            model.Plan.ValueString(),
+		CustomPlan:      customInstancePlan(&model),
 		OSFamily:        "Linux",
 		TemplateType:    "Operating System",
 		Hostname:        model.Name.ValueString(),
@@ -686,6 +781,19 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	r.applyVMState(&model, ready)
 	r.fillPublicIP(ctx, &model, ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+func customInstancePlan(model *instanceResourceModel) *instance.CustomPlan {
+	if model.CPU.IsNull() || model.CPU.IsUnknown() ||
+		model.MemoryGB.IsNull() || model.MemoryGB.IsUnknown() ||
+		model.DiskGB.IsNull() || model.DiskGB.IsUnknown() {
+		return nil
+	}
+	return &instance.CustomPlan{
+		CPU:     strconv.FormatInt(model.CPU.ValueInt64(), 10),
+		Memory:  strconv.FormatInt(model.MemoryGB.ValueInt64(), 10),
+		Storage: strconv.FormatInt(model.DiskGB.ValueInt64(), 10),
+	}
 }
 
 func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {

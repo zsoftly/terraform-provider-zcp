@@ -266,6 +266,12 @@ func NewObjectStorageResourceWithServices(svc objectStorageServiceIface, planSvc
 	return &objectStorageResource{svc: svc, planSvc: planSvc, storageCategorySvc: storageCategorySvc}
 }
 
+// NewObjectStorageKeyResourceWithService creates an objectStorageKeyResource
+// pre-wired with the given service; available only in test binaries.
+func NewObjectStorageKeyResourceWithService(svc objectStorageServiceIface) resource.Resource {
+	return &objectStorageKeyResource{svc: svc}
+}
+
 // NewObjectStorageBucketResourceWithService creates an objectStorageBucketResource
 // pre-wired with the given service; available only in test binaries.
 func NewObjectStorageBucketResourceWithService(svc objectStorageServiceIface) resource.Resource {

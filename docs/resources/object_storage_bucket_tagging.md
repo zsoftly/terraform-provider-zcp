@@ -6,7 +6,9 @@ description: |-
 
 # zcp_object_storage_bucket_tagging
 
-Manages the complete bucket tag set through the object storage gateway.
+Manages the complete bucket tag set through the object storage gateway. Set
+`ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store, for
+example from `zcp_object_storage_key`, before applying this resource.
 
 ```terraform
 resource "zcp_object_storage_bucket_tagging" "media" {

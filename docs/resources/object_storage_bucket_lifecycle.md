@@ -7,9 +7,12 @@ description: |-
 # zcp_object_storage_bucket_lifecycle
 
 Manages one expiry rule through the object storage gateway. The SDK resolves the
-gateway endpoint from the selected object-storage instance. Set any duration to
-zero or omit it to leave that action disabled. This resource owns the lifecycle
-configuration and requires the bucket to have exactly one lifecycle rule.
+gateway endpoint from the selected object-storage instance. Set
+`ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store, for
+example from `zcp_object_storage_key`, before applying this resource. Set any
+duration to zero or omit it to leave that action disabled. This resource owns
+the lifecycle configuration and requires the bucket to have exactly one
+lifecycle rule.
 
 ```terraform
 resource "zcp_object_storage_bucket_lifecycle" "uploads" {

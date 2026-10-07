@@ -44,8 +44,8 @@ func (r *objectStorageBucketResource) Metadata(_ context.Context, req resource.M
 func (r *objectStorageBucketResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
 		MarkdownDescription: "Manages a bucket in a `zcp_object_storage` store. Bucket contents, policies, and " +
-			"lifecycle settings are managed via the S3 API (e.g. the AWS/minio providers pointed at the store's " +
-			"endpoint with its `api_key`/`api_secret`), not by this resource.",
+			"lifecycle settings are managed via the S3 API or the matching bucket configuration resources, " +
+			"not by this resource. Use `zcp_object_storage_key` to create S3 credentials for those operations.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,

@@ -176,6 +176,9 @@ type instanceStateModel struct {
 	Region          types.String   `tfsdk:"region"`
 	Template        types.String   `tfsdk:"template"`
 	Plan            types.String   `tfsdk:"plan"`
+	CPU             types.Int64    `tfsdk:"cpu"`
+	MemoryGB        types.Int64    `tfsdk:"memory_gb"`
+	DiskGB          types.Int64    `tfsdk:"disk_gb"`
 	BillingCycle    types.String   `tfsdk:"billing_cycle"`
 	Project         types.String   `tfsdk:"project"`
 	SSHKey          types.String   `tfsdk:"ssh_key"`
@@ -225,6 +228,9 @@ func instanceValues(t *testing.T, id string) map[string]tftypes.Value {
 		"region":           tftypes.NewValue(tftypes.String, "yow-1"),
 		"template":         tftypes.NewValue(tftypes.String, "ubuntu-24"),
 		"plan":             tftypes.NewValue(tftypes.String, "ci1.small"),
+		"cpu":              tftypes.NewValue(tftypes.Number, nil),
+		"memory_gb":        tftypes.NewValue(tftypes.Number, nil),
+		"disk_gb":          tftypes.NewValue(tftypes.Number, nil),
 		"billing_cycle":    tftypes.NewValue(tftypes.String, "hourly"),
 		"project":          null(),
 		"ssh_key":          null(),
@@ -426,6 +432,53 @@ func TestInstanceResource_createAttachesExistingNetwork(t *testing.T) {
 	}
 	if svc.createReq.IsPublic {
 		t.Error("IsPublic = true, want false (assign_public_ip=false)")
+	}
+}
+
+func TestInstanceResource_createSendsFixedPlan(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	resp := createInstance(t, svc)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.createReq.Plan != "ci1.small" {
+		t.Errorf("Plan = %q, want ci1.small", svc.createReq.Plan)
+	}
+	if svc.createReq.CustomPlan != nil {
+		t.Errorf("CustomPlan = %#v, want nil", svc.createReq.CustomPlan)
+	}
+}
+
+func TestInstanceResource_createSendsCustomPlan(t *testing.T) {
+	svc := &fakeInstanceService{
+		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
+		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
+	}
+	r := internalprovider.NewInstanceResourceWithService(svc)
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	vals := instanceValues(t, "")
+	vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	vals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(45))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	if svc.createReq.Plan != "" {
+		t.Errorf("Plan = %q, want empty for custom plan", svc.createReq.Plan)
+	}
+	if svc.createReq.CustomPlan == nil {
+		t.Fatal("CustomPlan = nil, want custom plan")
+	}
+	if svc.createReq.CustomPlan.CPU != "2" || svc.createReq.CustomPlan.Memory != "4" || svc.createReq.CustomPlan.Storage != "45" {
+		t.Errorf("CustomPlan = %#v, want cpu=2 memory=4 storage=45", svc.createReq.CustomPlan)
 	}
 }
 
@@ -662,6 +715,79 @@ func validateInstanceConfig(t *testing.T, vals map[string]tftypes.Value) resourc
 	var resp resource.ValidateConfigResponse
 	r.ValidateConfig(context.Background(), req, &resp)
 	return resp
+}
+
+func TestInstanceResource_validateCustomPlanAccepted(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	vals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(45))
+	vals["network"] = tftypes.NewValue(tftypes.String, "app-net")
+	resp := validateInstanceConfig(t, vals)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error for complete custom plan: %v", resp.Diagnostics)
+	}
+}
+
+func TestInstanceResource_validatePlanOrCustomPlanRequired(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when neither plan nor complete custom plan is set")
+	}
+}
+
+func TestInstanceResource_validatePlanConflictsWithCustomPlan(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	vals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(45))
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when plan and custom plan inputs are both set")
+	}
+}
+
+func TestInstanceResource_validateCustomPlanRequiresAllInputs(t *testing.T) {
+	vals := instanceValues(t, "")
+	vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	resp := validateInstanceConfig(t, vals)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error for incomplete custom plan")
+	}
+}
+
+func TestInstanceResource_validateCustomPlanLimits(t *testing.T) {
+	for name, setValue := range map[string]func(map[string]tftypes.Value){
+		"cpu below minimum": func(vals map[string]tftypes.Value) {
+			vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(1))
+		},
+		"memory zero": func(vals map[string]tftypes.Value) {
+			vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(0))
+		},
+		"memory above maximum": func(vals map[string]tftypes.Value) {
+			vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(257))
+		},
+		"disk zero": func(vals map[string]tftypes.Value) {
+			vals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(0))
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			vals := instanceValues(t, "")
+			vals["plan"] = tftypes.NewValue(tftypes.String, nil)
+			vals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+			vals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+			vals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(45))
+			setValue(vals)
+			resp := validateInstanceConfig(t, vals)
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("expected custom plan limit validation error")
+			}
+		})
+	}
 }
 
 // TestInstanceResource_validateSkipsUnknownNetworksElements verifies that

@@ -7,8 +7,11 @@ description: |-
 # zcp_object_storage_bucket_cors
 
 Manages one CORS rule through the object storage gateway. The SDK resolves the
-gateway endpoint from the selected object-storage instance. This resource owns
-the CORS configuration and requires the bucket to have exactly one CORS rule.
+gateway endpoint from the selected object-storage instance. Set
+`ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store, for
+example from `zcp_object_storage_key`, before applying this resource. This
+resource owns the CORS configuration and requires the bucket to have exactly one
+CORS rule.
 
 ```terraform
 resource "zcp_object_storage_bucket_cors" "media" {
