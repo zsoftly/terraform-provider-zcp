@@ -191,6 +191,13 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 `<slug>/<cloud_provider>/<region>/<template>` are required. `name`, `state` and
 the IPs come from the subsequent read.
 
+For a custom-plan instance, leave the `plan` segment empty and include
+`cpu`/`memory_gb`/`disk_gb` after `default_network`:
+
+```shell
+terraform import zcp_instance.custom '<slug>/<cloud_provider>/<region>/<template>//<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>[/<networks>]'
+```
+
 ## Schema
 
 ### Required

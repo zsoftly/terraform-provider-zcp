@@ -1230,37 +1230,61 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 // leaves the matching attribute null, which only matches a config that also
 // omits it. Format (slash-separated, trailing/empty segments allowed):
 //
-//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>
+//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>
 //
 // <slug>/<cloud_provider>/<region>/<template> are required. name, state and IPs
 // come from the subsequent Read; tags cannot be imported (the API does not
 // return them). `network_type`, `vr_plan`, `default_network`, and `networks`
 // were added after the rest of this format; an import ID written for an older
 // provider version, with fewer trailing segments, still works and simply
-// leaves those newer attributes null. `networks` is a list and does not fit
+// leaves those newer attributes null. `cpu`, `memory_gb`, and `disk_gb` are
+// optional for custom-plan instances. `networks` is a list and does not fit
 // importPositional's single-value-per-segment scheme, so it is carried as an
 // optional final comma-separated segment (e.g. "net-a,net-b") and set
 // separately.
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category", "network_type", "vr_plan", "default_network"}
-	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]"
+	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>]"
+	importID := req.ID
 
 	// Split fully (not SplitN) so an ID with more segments than documented is
 	// rejected instead of the extra segments silently collapsing into the
 	// trailing networks value.
 	parts := strings.Split(req.ID, "/")
-	if len(parts) > len(fields)+1 {
+	if len(parts) > len(fields)+4 {
 		resp.Diagnostics.AddError("Invalid import ID",
 			fmt.Sprintf("expected format %q, got %q", format, req.ID))
 		return
 	}
 	var networksRaw string
+	var customPlanParts []string
 	if len(parts) == len(fields)+1 {
 		networksRaw = strings.TrimSpace(parts[len(fields)])
+		req.ID = strings.Join(parts[:len(fields)], "/")
+	} else if len(parts) > len(fields)+1 {
+		if len(parts) != len(fields)+3 && len(parts) != len(fields)+4 {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("expected format %q, got %q", format, req.ID))
+			return
+		}
+		customPlanParts = parts[len(fields) : len(fields)+3]
+		if len(parts) == len(fields)+4 {
+			networksRaw = strings.TrimSpace(parts[len(fields)+3])
+		}
 		req.ID = strings.Join(parts[:len(fields)], "/")
 	}
 
 	importPositional(ctx, req, resp, fields, 4, format)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if len(customPlanParts) > 0 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("plan"), types.StringNull())...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		setImportedInstanceCustomPlan(ctx, resp, customPlanParts, format, importID)
+	}
 	if resp.Diagnostics.HasError() || networksRaw == "" {
 		return
 	}
@@ -1274,4 +1298,26 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networksValue)...)
+}
+
+func setImportedInstanceCustomPlan(ctx context.Context, resp *resource.ImportStateResponse, values []string, format, importID string) {
+	fields := []string{"cpu", "memory_gb", "disk_gb"}
+	for i, field := range fields {
+		raw := strings.TrimSpace(values[i])
+		if raw == "" {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("custom-plan imports must include cpu, memory_gb, and disk_gb; expected format %q, got %q", format, importID))
+			return
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("custom-plan field %q must be an integer; expected format %q, got %q", field, format, importID))
+			return
+		}
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root(field), types.Int64Value(value))...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 }

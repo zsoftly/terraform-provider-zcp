@@ -1408,11 +1408,11 @@ func importInstance(t *testing.T, id string) resource.ImportStateResponse {
 
 // TestInstanceResource_importTooManySegmentsErrors verifies that an import ID
 // with more segments than the documented format (one more than the 14
-// positional fields plus the trailing networks segment) is rejected with the
-// "Invalid import ID" error instead of the extra segments silently collapsing
-// into the networks value.
+// positional fields plus custom-plan fields and the trailing networks segment)
+// is rejected with the "Invalid import ID" error instead of the extra segments
+// silently collapsing into the networks value.
 func TestInstanceResource_importTooManySegmentsErrors(t *testing.T) {
-	id := "vm1-abc/nimbo/yow-1/ubuntu-24/ci1.small/hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/net-a,net-b/extra"
+	id := "vm1-abc/nimbo/yow-1/ubuntu-24/ci1.small/hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/2/4/50/net-a,net-b/extra"
 	resp := importInstance(t, id)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error for an import ID with more segments than documented")
@@ -1425,6 +1425,63 @@ func TestInstanceResource_importTooManySegmentsErrors(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("diagnostics = %v, want an Invalid import ID error", resp.Diagnostics)
+	}
+}
+
+func TestInstanceResource_importCustomPlanSeedsCreateOnlyValues(t *testing.T) {
+	id := "vm1-abc/nimbo/yow-1/ubuntu-24//hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/2/4/50"
+	resp := importInstance(t, id)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if !got.Plan.IsNull() {
+		t.Fatalf("Plan = %#v, want null for custom-plan import", got.Plan)
+	}
+	if got.CPU.ValueInt64() != 2 || got.MemoryGB.ValueInt64() != 4 || got.DiskGB.ValueInt64() != 50 {
+		t.Fatalf("custom plan = cpu:%d memory_gb:%d disk_gb:%d, want 2/4/50", got.CPU.ValueInt64(), got.MemoryGB.ValueInt64(), got.DiskGB.ValueInt64())
+	}
+
+	schResp := instanceSchema(t)
+	tfType := instanceTFType(t)
+	planVals := instanceValues(t, "vm1-abc")
+	planVals["plan"] = tftypes.NewValue(tftypes.String, nil)
+	planVals["cpu"] = tftypes.NewValue(tftypes.Number, int64(2))
+	planVals["memory_gb"] = tftypes.NewValue(tftypes.Number, int64(4))
+	planVals["disk_gb"] = tftypes.NewValue(tftypes.Number, int64(50))
+
+	for _, tc := range []struct {
+		name  string
+		value int64
+	}{
+		{name: "cpu", value: 2},
+		{name: "memory_gb", value: 4},
+		{name: "disk_gb", value: 50},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			attribute, ok := schResp.Schema.Attributes[tc.name].(rschema.Int64Attribute)
+			if !ok {
+				t.Fatalf("%s is not a schema.Int64Attribute", tc.name)
+			}
+			req := planmodifier.Int64Request{
+				Path:        path.Root(tc.name),
+				State:       resp.State,
+				Plan:        tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, planVals)},
+				ConfigValue: types.Int64Value(tc.value),
+				StateValue:  types.Int64Value(tc.value),
+				PlanValue:   types.Int64Value(tc.value),
+			}
+			planResp := planmodifier.Int64Response{PlanValue: req.PlanValue}
+			for _, m := range attribute.PlanModifiers {
+				m.PlanModifyInt64(context.Background(), req, &planResp)
+			}
+			if planResp.RequiresReplace {
+				t.Fatalf("%s plan modifier required replacement for matching imported custom-plan value", tc.name)
+			}
+		})
 	}
 }
 
