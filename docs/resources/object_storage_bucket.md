@@ -10,10 +10,11 @@ Manages a bucket in a `zcp_object_storage` store.
 
 ~> Bucket contents remain outside this resource. Manage bucket versioning,
 policy, tags, lifecycle, and CORS with the matching bucket configuration
-resources. Those resources use the store's S3-compatible gateway, obtain gateway
-credentials internally, and do not expose them as resource attributes. They do
-not manage object upload, download, copy, move, presigned URLs, or bucket
-encryption.
+resources. Those resources use the store's S3-compatible gateway and require an
+active object-storage access key. Create one with `zcp_object_storage_key` and
+set `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` for the provider process before
+managing bucket settings. They do not manage object upload, download, copy,
+move, presigned URLs, or bucket encryption.
 
 ## Example Usage
 

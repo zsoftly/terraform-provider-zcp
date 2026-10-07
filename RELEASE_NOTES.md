@@ -1,5 +1,22 @@
 # terraform-provider-zcp Release Notes
 
+## Unreleased
+
+This release updates the provider to the zcp-cli SDK v0.0.30.
+
+- `zcp_instance` supports custom VM plans with `cpu`, `memory_gb`, and
+  `disk_gb`. Fixed catalogue plans continue to use `plan`; custom inputs and
+  `plan` are mutually exclusive.
+- New `zcp_object_storage_key` creates and revokes object storage S3 access
+  keys. Terraform stores the plaintext secret in state after create and
+  preserves it on refresh after the API no longer returns it.
+- Object storage reads support the current API storage-size response shape.
+- Bucket configuration resources continue to manage S3 gateway settings, but
+  the provider process must now have `ZCP_S3_ACCESS_KEY` and
+  `ZCP_S3_SECRET_KEY` set to an active key for the store.
+
+---
+
 ## v0.2.0 (2026-09-07)
 
 This release adds VPC instance configuration, volume data sources, and improved

@@ -7,8 +7,10 @@ description: |-
 # zcp_object_storage_bucket_policy
 
 Manages the complete S3 bucket policy through the object storage gateway. This
-resource owns the full bucket policy. Do not combine it with CLI visibility or
-ACL commands, which update the same policy.
+resource owns the full bucket policy. Set `ZCP_S3_ACCESS_KEY` and
+`ZCP_S3_SECRET_KEY` to an active key for the store, for example from
+`zcp_object_storage_key`, before applying this resource. Do not combine it with
+CLI visibility or ACL commands, which update the same policy.
 
 ```terraform
 resource "zcp_object_storage_bucket_policy" "media" {

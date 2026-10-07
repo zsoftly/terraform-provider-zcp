@@ -19,7 +19,14 @@ model:
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template
   change reprovisions the disk), and the other create-only inputs (`project`,
   `ssh_key`, `network`, `network_plan`, `network_type`, `vr_plan`, `networks`,
-  `default_network`, `assign_public_ip`, `storage_category`).
+  `default_network`, `assign_public_ip`, `storage_category`, `cpu`,
+  `memory_gb`, `disk_gb`).
+
+Set either a fixed catalogue `plan`, or omit `plan` and set all custom VM plan
+inputs: `cpu`, `memory_gb`, and `disk_gb`. Custom memory and disk values are in
+GB, matching the ZCP API and CLI. A `billing_cycle` change updates fixed-plan
+instances in place, but forces replacement for custom-plan instances because the
+current change-plan API accepts only catalogue plan slugs.
 
 **Networking.** `network_type` selects the network model. Leave it unset for
 `Isolated`, or set `L2` for a plain network, or `Vpc` for a network behind a
@@ -108,6 +115,25 @@ resource "zcp_instance" "web" {
 }
 ```
 
+A custom-plan instance omits `plan` and provides CPU, memory, and root disk
+inputs:
+
+```terraform
+resource "zcp_instance" "custom" {
+  name             = "custom-01"
+  cloud_provider   = data.zcp_region.yow.cloud_provider
+  region           = data.zcp_region.yow.slug
+  template         = "ubuntu-2404-lts"
+  cpu              = 2
+  memory_gb        = 4
+  disk_gb          = 45
+  billing_cycle    = "hourly"
+  network          = zcp_network.app.id
+  storage_category = "nvme"
+  ssh_key          = "deploy-key"
+}
+```
+
 A `Vpc` instance uses `vr_plan` in place of `network_plan`:
 
 ```terraform
@@ -165,6 +191,13 @@ terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/
 `<slug>/<cloud_provider>/<region>/<template>` are required. `name`, `state` and
 the IPs come from the subsequent read.
 
+For a custom-plan instance, leave the `plan` segment empty and include
+`cpu`/`memory_gb`/`disk_gb` after `default_network`:
+
+```shell
+terraform import zcp_instance.custom '<slug>/<cloud_provider>/<region>/<template>//<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>[/<networks>]'
+```
+
 ## Schema
 
 ### Required
@@ -177,16 +210,28 @@ the IPs come from the subsequent read.
   replacement.
 - `template` (String) Template (OS image) slug. See `data.zcp_template`.
   Changing this forces replacement.
-- `plan` (String) Compute plan slug. Run `zcp plan vm` to list values. Updated
-  in place (resize): the provider stops the instance, changes the offering, and
-  restarts it to its prior running/stopped state.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Updated in
-  place together with `plan`.
+  place together with `plan` for fixed-plan instances. Changing this on a
+  custom-plan instance forces replacement.
 
 ### Optional
 
 - `project` (String) Project slug. Inherits from the provider `default_project`
   if omitted. Changing this forces replacement.
+- `plan` (String) Compute plan slug. Run `zcp plan vm` to list values. Exactly
+  one of `plan` or the complete custom plan inputs (`cpu`, `memory_gb`, and
+  `disk_gb`) must be set. Updated in place (resize): the provider stops the
+  instance, changes the offering, and restarts it to its prior running/stopped
+  state.
+- `cpu` (Number) Number of vCPUs for a custom VM plan. Must be at least 2. Set
+  together with `memory_gb` and `disk_gb`, and omit `plan`. Changing this forces
+  replacement.
+- `memory_gb` (Number) RAM in GB for a custom VM plan. Must be greater than 0
+  and no more than 256. Set together with `cpu` and `disk_gb`, and omit `plan`.
+  Changing this forces replacement.
+- `disk_gb` (Number) Root disk size in GB for a custom VM plan. Must be greater
+  than 0. Set together with `cpu` and `memory_gb`, and omit `plan`. Changing
+  this forces replacement.
 - `ssh_key` (String) Name of an existing SSH key to attach for login (see
   `zcp_ssh_key`). Changing this forces replacement.
 - `network` (String) Slug of an existing `zcp_network` to attach the instance

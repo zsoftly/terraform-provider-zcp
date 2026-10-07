@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/int64planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/listplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
@@ -119,6 +121,9 @@ type instanceResourceModel struct {
 	Region          types.String `tfsdk:"region"`
 	Template        types.String `tfsdk:"template"`
 	Plan            types.String `tfsdk:"plan"`
+	CPU             types.Int64  `tfsdk:"cpu"`
+	MemoryGB        types.Int64  `tfsdk:"memory_gb"`
+	DiskGB          types.Int64  `tfsdk:"disk_gb"`
 	BillingCycle    types.String `tfsdk:"billing_cycle"`
 	Project         types.String `tfsdk:"project"`
 	SSHKey          types.String `tfsdk:"ssh_key"`
@@ -152,7 +157,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`, `billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, and `template` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a resize requires it.",
+		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, fixed-plan `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, `template`, custom plan inputs, and custom-plan `billing_cycle` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a fixed-plan resize requires it.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -179,12 +184,34 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 				PlanModifiers:       requiresReplace,
 			},
 			"plan": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "Compute plan slug. Run `zcp plan vm` to list available plans. Updated in place (resize) via the change-plan operation.",
+				Optional:            true,
+				MarkdownDescription: "Compute plan slug. Run `zcp plan vm` to list available plans. Exactly one of `plan` or the complete custom plan inputs (`cpu`, `memory_gb`, and `disk_gb`) must be set. Updated in place (resize) via the change-plan operation.",
+			},
+			"cpu": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Number of vCPUs for a custom VM plan. Must be set together with `memory_gb` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
+			"memory_gb": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "RAM in GB for a custom VM plan. Must be greater than 0 and no more than 256 GB. Must be set together with `cpu` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
+			},
+			"disk_gb": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Root disk size in GB for a custom VM plan. Must be greater than 0. Must be set together with `cpu` and `memory_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan`.",
+				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan` for fixed-plan instances. Changing this on a custom-plan instance forces replacement.",
+				PlanModifiers: []planmodifier.String{
+					stringplanmodifier.RequiresReplaceIf(
+						billingCycleRequiresReplaceForCustomPlan,
+						"Changing billing_cycle on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
+						"Changing `billing_cycle` on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
+					),
+				},
 			},
 			"project": schema.StringAttribute{
 				Optional:            true,
@@ -387,6 +414,8 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	validateInstancePlanConfig(&model, resp)
+
 	networkSet := !model.Network.IsNull() && !model.Network.IsUnknown()
 	networksKnown := !model.Networks.IsNull() && !model.Networks.IsUnknown()
 	planSet := !model.NetworkPlan.IsNull() && !model.NetworkPlan.IsUnknown()
@@ -552,6 +581,109 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 }
 
+const (
+	customPlanCPUMin      = int64(2)
+	customPlanMemoryMaxGB = int64(256)
+)
+
+func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
+	planUnknown := model.Plan.IsUnknown()
+	cpuUnknown := model.CPU.IsUnknown()
+	memoryUnknown := model.MemoryGB.IsUnknown()
+	diskUnknown := model.DiskGB.IsUnknown()
+	unknownAny := planUnknown || cpuUnknown || memoryUnknown || diskUnknown
+
+	planSet := !model.Plan.IsNull() && !planUnknown
+	cpuSet := !model.CPU.IsNull() && !cpuUnknown
+	memorySet := !model.MemoryGB.IsNull() && !memoryUnknown
+	diskSet := !model.DiskGB.IsNull() && !diskUnknown
+	customAny := cpuSet || memorySet || diskSet
+	customComplete := cpuSet && memorySet && diskSet
+
+	if customAny {
+		validateKnownCustomInstancePlanValues(model, resp)
+	}
+	if unknownAny {
+		return
+	}
+	if planSet && customAny {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("plan"),
+			"Conflicting instance plan configuration",
+			"`plan` cannot be used with `cpu`, `memory_gb`, or `disk_gb`. Omit `plan` to create a custom VM plan.",
+		)
+		return
+	}
+	if !planSet && !customComplete {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("plan"),
+			"Missing instance plan configuration",
+			"Set `plan`, or set all custom VM plan inputs: `cpu`, `memory_gb`, and `disk_gb`.",
+		)
+		return
+	}
+	if customAny && !customComplete {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cpu"),
+			"Incomplete custom instance plan",
+			"`cpu`, `memory_gb`, and `disk_gb` must all be set for a custom VM plan.",
+		)
+		return
+	}
+	if !customAny {
+		return
+	}
+}
+
+func validateKnownCustomInstancePlanValues(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
+	if !model.CPU.IsNull() && !model.CPU.IsUnknown() && model.CPU.ValueInt64() < customPlanCPUMin {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("cpu"),
+			"Invalid custom instance CPU",
+			fmt.Sprintf("`cpu` must be at least %d vCPU.", customPlanCPUMin),
+		)
+	}
+	if !model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() {
+		switch memory := model.MemoryGB.ValueInt64(); {
+		case memory <= 0:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("memory_gb"),
+				"Invalid custom instance memory",
+				"`memory_gb` must be greater than 0 GB.",
+			)
+		case memory > customPlanMemoryMaxGB:
+			resp.Diagnostics.AddAttributeError(
+				path.Root("memory_gb"),
+				"Invalid custom instance memory",
+				fmt.Sprintf("`memory_gb` must be less than or equal to %d GB.", customPlanMemoryMaxGB),
+			)
+		}
+	}
+	if !model.DiskGB.IsNull() && !model.DiskGB.IsUnknown() && model.DiskGB.ValueInt64() <= 0 {
+		resp.Diagnostics.AddAttributeError(
+			path.Root("disk_gb"),
+			"Invalid custom instance disk",
+			"`disk_gb` must be greater than 0 GB.",
+		)
+	}
+}
+
+func billingCycleRequiresReplaceForCustomPlan(ctx context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+	var state instanceResourceModel
+	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	resp.RequiresReplace = isCustomInstancePlan(&state)
+}
+
+func isCustomInstancePlan(model *instanceResourceModel) bool {
+	return (model.Plan.IsNull() || model.Plan.IsUnknown()) &&
+		!model.CPU.IsNull() && !model.CPU.IsUnknown() &&
+		!model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() &&
+		!model.DiskGB.IsNull() && !model.DiskGB.IsUnknown()
+}
+
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var model instanceResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
@@ -614,6 +746,7 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 		Networks:        networks,
 		BillingCycle:    model.BillingCycle.ValueString(),
 		Plan:            model.Plan.ValueString(),
+		CustomPlan:      customInstancePlan(&model),
 		OSFamily:        "Linux",
 		TemplateType:    "Operating System",
 		Hostname:        model.Name.ValueString(),
@@ -686,6 +819,19 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	r.applyVMState(&model, ready)
 	r.fillPublicIP(ctx, &model, ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
+}
+
+func customInstancePlan(model *instanceResourceModel) *instance.CustomPlan {
+	if model.CPU.IsNull() || model.CPU.IsUnknown() ||
+		model.MemoryGB.IsNull() || model.MemoryGB.IsUnknown() ||
+		model.DiskGB.IsNull() || model.DiskGB.IsUnknown() {
+		return nil
+	}
+	return &instance.CustomPlan{
+		CPU:     strconv.FormatInt(model.CPU.ValueInt64(), 10),
+		Memory:  strconv.FormatInt(model.MemoryGB.ValueInt64(), 10),
+		Storage: strconv.FormatInt(model.DiskGB.ValueInt64(), 10),
+	}
 }
 
 func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -1084,37 +1230,61 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 // leaves the matching attribute null, which only matches a config that also
 // omits it. Format (slash-separated, trailing/empty segments allowed):
 //
-//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>
+//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>
 //
 // <slug>/<cloud_provider>/<region>/<template> are required. name, state and IPs
 // come from the subsequent Read; tags cannot be imported (the API does not
 // return them). `network_type`, `vr_plan`, `default_network`, and `networks`
 // were added after the rest of this format; an import ID written for an older
 // provider version, with fewer trailing segments, still works and simply
-// leaves those newer attributes null. `networks` is a list and does not fit
+// leaves those newer attributes null. `cpu`, `memory_gb`, and `disk_gb` are
+// optional for custom-plan instances. `networks` is a list and does not fit
 // importPositional's single-value-per-segment scheme, so it is carried as an
 // optional final comma-separated segment (e.g. "net-a,net-b") and set
 // separately.
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category", "network_type", "vr_plan", "default_network"}
-	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]"
+	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>]"
+	importID := req.ID
 
 	// Split fully (not SplitN) so an ID with more segments than documented is
 	// rejected instead of the extra segments silently collapsing into the
 	// trailing networks value.
 	parts := strings.Split(req.ID, "/")
-	if len(parts) > len(fields)+1 {
+	if len(parts) > len(fields)+4 {
 		resp.Diagnostics.AddError("Invalid import ID",
 			fmt.Sprintf("expected format %q, got %q", format, req.ID))
 		return
 	}
 	var networksRaw string
+	var customPlanParts []string
 	if len(parts) == len(fields)+1 {
 		networksRaw = strings.TrimSpace(parts[len(fields)])
+		req.ID = strings.Join(parts[:len(fields)], "/")
+	} else if len(parts) > len(fields)+1 {
+		if len(parts) != len(fields)+3 && len(parts) != len(fields)+4 {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("expected format %q, got %q", format, req.ID))
+			return
+		}
+		customPlanParts = parts[len(fields) : len(fields)+3]
+		if len(parts) == len(fields)+4 {
+			networksRaw = strings.TrimSpace(parts[len(fields)+3])
+		}
 		req.ID = strings.Join(parts[:len(fields)], "/")
 	}
 
 	importPositional(ctx, req, resp, fields, 4, format)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if len(customPlanParts) > 0 {
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("plan"), types.StringNull())...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		setImportedInstanceCustomPlan(ctx, resp, customPlanParts, format, importID)
+	}
 	if resp.Diagnostics.HasError() || networksRaw == "" {
 		return
 	}
@@ -1128,4 +1298,26 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networksValue)...)
+}
+
+func setImportedInstanceCustomPlan(ctx context.Context, resp *resource.ImportStateResponse, values []string, format, importID string) {
+	fields := []string{"cpu", "memory_gb", "disk_gb"}
+	for i, field := range fields {
+		raw := strings.TrimSpace(values[i])
+		if raw == "" {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("custom-plan imports must include cpu, memory_gb, and disk_gb; expected format %q, got %q", format, importID))
+			return
+		}
+		value, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			resp.Diagnostics.AddError("Invalid import ID",
+				fmt.Sprintf("custom-plan field %q must be an integer; expected format %q, got %q", field, format, importID))
+			return
+		}
+		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root(field), types.Int64Value(value))...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
 }

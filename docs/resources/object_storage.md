@@ -10,8 +10,10 @@ Manages a ZCP object storage store (S3-compatible). Create buckets with
 `zcp_object_storage_bucket`. `size_gb` resizes the store in place; every other
 change forces replacement.
 
-The store's S3 credentials are exported as the sensitive attributes `api_key`
-and `api_secret`.
+Use `zcp_object_storage_key` to create and revoke S3 access keys for the store.
+The legacy sensitive attributes `api_key` and `api_secret` remain in state when
+the API returns them, but new key management should use
+`zcp_object_storage_key`.
 
 ## Example Usage
 

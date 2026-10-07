@@ -12,7 +12,7 @@ require (
 	github.com/hashicorp/terraform-plugin-log v0.10.0
 	github.com/hashicorp/terraform-plugin-testing v1.16.0
 	github.com/minio/minio-go/v7 v7.3.0
-	github.com/zsoftly/zcp-cli v0.0.29
+	github.com/zsoftly/zcp-cli v0.0.30
 )
 
 require (

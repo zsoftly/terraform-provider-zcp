@@ -28,6 +28,10 @@ type objectStorageServiceIface interface {
 	Create(ctx context.Context, req objectstorage.CreateRequest) (*objectstorage.ObjectStorage, error)
 	Delete(ctx context.Context, slug string) error
 	Resize(ctx context.Context, slug string, storageGB int) (*objectstorage.ObjectStorage, error)
+	ListKeys(ctx context.Context, slug string) ([]objectstorage.Key, error)
+	CreateKey(ctx context.Context, slug string) (*objectstorage.Key, error)
+	DeleteKey(ctx context.Context, slug, keyID string) error
+	GetCredentialsForKey(ctx context.Context, slug, keyID string) (*objectstorage.Credentials, error)
 	GetBucket(ctx context.Context, slug, bucketSlug string) (*objectstorage.Bucket, error)
 	CreateBucket(ctx context.Context, slug, name string) (*objectstorage.Bucket, error)
 	DeleteBucket(ctx context.Context, slug, bucketSlug string) error
@@ -197,7 +201,7 @@ func (r *objectStorageResource) ValidateConfig(ctx context.Context, req resource
 func applyStoreState(model *objectStorageResourceModel, store *objectstorage.ObjectStorage) {
 	model.ID = types.StringValue(store.Slug)
 	model.Status = types.StringValue(store.Status)
-	if size, err := store.Size.Int64(); err == nil {
+	if size, ok := objectStorageAllocatedSizeGB(store); ok {
 		model.Size = types.Int64Value(size)
 	} else {
 		model.Size = types.Int64Null()
@@ -212,6 +216,20 @@ func applyStoreState(model *objectStorageResourceModel, store *objectstorage.Obj
 	} else if model.APISecret.IsUnknown() {
 		model.APISecret = types.StringNull()
 	}
+}
+
+func objectStorageAllocatedSizeGB(store *objectstorage.ObjectStorage) (int64, bool) {
+	if store != nil && store.Offering != nil {
+		if size, err := store.Offering.Storage.Int64(); err == nil {
+			return size, true
+		}
+	}
+	if store != nil {
+		if size, err := store.Size.Int64(); err == nil {
+			return size, true
+		}
+	}
+	return 0, false
 }
 
 func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {

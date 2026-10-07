@@ -39,6 +39,12 @@ type fakeObjectStorageService struct {
 	cors           string
 	lifecycleSet   *fakeLifecycleRequest
 	corsSet        *fakeCORSRequest
+	keys           []objectstorage.Key
+	createdKey     *objectstorage.Key
+	deletedKeys    []string
+	deleteKeyErr   error
+	credentials    *objectstorage.Credentials
+	credentialsErr error
 }
 
 type fakeLifecycleRequest struct {
@@ -106,6 +112,28 @@ func (f *fakeObjectStorageService) Resize(_ context.Context, _ string, storageGB
 		return f.store, nil
 	}
 	return nil, f.err
+}
+func (f *fakeObjectStorageService) ListKeys(_ context.Context, _ string) ([]objectstorage.Key, error) {
+	return f.keys, f.err
+}
+func (f *fakeObjectStorageService) CreateKey(_ context.Context, _ string) (*objectstorage.Key, error) {
+	if f.createdKey != nil && f.err == nil {
+		f.keys = append(f.keys, *f.createdKey)
+	}
+	return f.createdKey, f.err
+}
+func (f *fakeObjectStorageService) DeleteKey(_ context.Context, _, keyID string) error {
+	f.deletedKeys = append(f.deletedKeys, keyID)
+	if f.deleteKeyErr != nil {
+		return f.deleteKeyErr
+	}
+	return f.err
+}
+func (f *fakeObjectStorageService) GetCredentialsForKey(_ context.Context, _, _ string) (*objectstorage.Credentials, error) {
+	if f.credentialsErr != nil {
+		return nil, f.credentialsErr
+	}
+	return f.credentials, f.err
 }
 func (f *fakeObjectStorageService) GetBucket(_ context.Context, _, _ string) (*objectstorage.Bucket, error) {
 	if f.bucket == nil {
@@ -213,9 +241,237 @@ func objectStorageSchema(t *testing.T) resource.SchemaResponse {
 	return schResp
 }
 
+type objectStorageKeyStateModel struct {
+	ID                 types.String   `tfsdk:"id"`
+	ObjectStorage      types.String   `tfsdk:"object_storage"`
+	APIKey             types.String   `tfsdk:"api_key"`
+	APISecret          types.String   `tfsdk:"api_secret"`
+	Status             types.String   `tfsdk:"status"`
+	IsPrimary          types.Bool     `tfsdk:"is_primary"`
+	SecretVisibleUntil types.String   `tfsdk:"secret_visible_until"`
+	CreatedAt          types.String   `tfsdk:"created_at"`
+	UpdatedAt          types.String   `tfsdk:"updated_at"`
+	Timeouts           timeouts.Value `tfsdk:"timeouts"`
+}
+
+func objectStorageKeySchema(t *testing.T) resource.SchemaResponse {
+	t.Helper()
+	r := internalprovider.NewObjectStorageKeyResource()
+	var schResp resource.SchemaResponse
+	r.Schema(context.Background(), resource.SchemaRequest{}, &schResp)
+	return schResp
+}
+
+func objectStorageKeyValues(t *testing.T, schResp resource.SchemaResponse, objectStorage, id, apiKey, apiSecret string) map[string]tftypes.Value {
+	t.Helper()
+	nullString := tftypes.NewValue(tftypes.String, nil)
+	nullBool := tftypes.NewValue(tftypes.Bool, nil)
+	idVal := nullString
+	if id != "" {
+		idVal = tftypes.NewValue(tftypes.String, id)
+	}
+	apiKeyVal := nullString
+	if apiKey != "" {
+		apiKeyVal = tftypes.NewValue(tftypes.String, apiKey)
+	}
+	apiSecretVal := nullString
+	if apiSecret != "" {
+		apiSecretVal = tftypes.NewValue(tftypes.String, apiSecret)
+	}
+	return map[string]tftypes.Value{
+		"id":                   idVal,
+		"object_storage":       tftypes.NewValue(tftypes.String, objectStorage),
+		"api_key":              apiKeyVal,
+		"api_secret":           apiSecretVal,
+		"status":               nullString,
+		"is_primary":           nullBool,
+		"secret_visible_until": nullString,
+		"created_at":           nullString,
+		"updated_at":           nullString,
+		"timeouts":             timeoutsNull(t, schResp),
+	}
+}
+
 func objectStorageRaw(t *testing.T, schResp resource.SchemaResponse, id string, sizeGB *int64, size *int64) tftypes.Value {
 	t.Helper()
 	return objectStorageRawWithPlan(t, schResp, id, "", sizeGB, size)
+}
+
+func TestObjectStorageKeyResource_createStoresVisibleSecret(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey: &objectstorage.Key{
+			ID:                 "key-1",
+			APIKey:             "access-1",
+			APISecret:          "secret-1",
+			Status:             "active",
+			IsPrimary:          true,
+			SecretVisibleUntil: "2026-10-07T12:00:00Z",
+			CreatedAt:          "2026-10-07T11:00:00Z",
+			UpdatedAt:          "2026-10-07T11:00:00Z",
+		},
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	var got objectStorageKeyStateModel
+	if diags := createResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.ID.ValueString() != "key-1" || got.APIKey.ValueString() != "access-1" || got.APISecret.ValueString() != "secret-1" {
+		t.Fatalf("state key = id:%q api_key:%q api_secret:%q, want created key and secret", got.ID.ValueString(), got.APIKey.ValueString(), got.APISecret.ValueString())
+	}
+	if !got.IsPrimary.ValueBool() {
+		t.Fatal("IsPrimary = false, want true")
+	}
+}
+
+func TestObjectStorageKeyResource_createFetchesVisibleSecret(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey: &objectstorage.Key{ID: "key-1", APIKey: "access-1", Status: "active"},
+		credentials: &objectstorage.Credentials{
+			APIKey:             "access-1",
+			APISecret:          "secret-1",
+			SecretVisibleUntil: "2026-10-07T12:00:00Z",
+		},
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	var got objectStorageKeyStateModel
+	if diags := createResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.APISecret.ValueString() != "secret-1" {
+		t.Fatalf("APISecret = %q, want fetched secret", got.APISecret.ValueString())
+	}
+}
+
+func TestObjectStorageKeyResource_createRevokesKeyWhenSecretUnavailable(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey:     &objectstorage.Key{ID: "key-1", APIKey: "access-1", Status: "active"},
+		credentialsErr: errors.New("secret expired"),
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected error when plaintext secret is unavailable")
+	}
+	if len(svc.deletedKeys) != 1 || svc.deletedKeys[0] != "key-1" {
+		t.Fatalf("deletedKeys = %v, want [key-1]", svc.deletedKeys)
+	}
+}
+
+func TestObjectStorageKeyResource_createWarnsWhenSecretFailureCleanupFails(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		createdKey:     &objectstorage.Key{ID: "key-1", APIKey: "access-1", Status: "active"},
+		credentialsErr: errors.New("secret expired"),
+		deleteKeyErr:   errors.New("delete failed"),
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	planVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "", "", ""))
+	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), createReq, createResp)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected error when plaintext secret is unavailable")
+	}
+	warned := false
+	for _, d := range createResp.Diagnostics.Warnings() {
+		if strings.Contains(d.Summary(), "cleanup failed") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("diagnostics = %v, want cleanup warning", createResp.Diagnostics)
+	}
+}
+
+func TestObjectStorageKeyResource_readPreservesSecretAfterVisibilityExpires(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		keys: []objectstorage.Key{{
+			ID:                 "key-1",
+			APIKey:             "access-1",
+			APISecret:          "MTIzNDU2Nzg5MDEy:YWJj:MTIzNDU2Nzg5MDEyMzQ1Ng==",
+			Status:             "active",
+			SecretVisibleUntil: "2026-10-07T12:00:00Z",
+		}},
+	}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	stateVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "key-1", "access-1", "saved-secret"))
+	readReq := resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), readReq, readResp)
+	if readResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", readResp.Diagnostics)
+	}
+	var got objectStorageKeyStateModel
+	if diags := readResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.APISecret.ValueString() != "saved-secret" {
+		t.Fatalf("APISecret = %q, want preserved secret", got.APISecret.ValueString())
+	}
+}
+
+func TestObjectStorageKeyResource_deleteRevokesKey(t *testing.T) {
+	svc := &fakeObjectStorageService{}
+	r := internalprovider.NewObjectStorageKeyResourceWithService(svc)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	stateVal := tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "store-1", "key-1", "access-1", "saved-secret"))
+	deleteReq := resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	var deleteResp resource.DeleteResponse
+	r.Delete(context.Background(), deleteReq, &deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", deleteResp.Diagnostics)
+	}
+	if len(svc.deletedKeys) != 1 || svc.deletedKeys[0] != "key-1" {
+		t.Fatalf("deletedKeys = %v, want [key-1]", svc.deletedKeys)
+	}
+}
+
+func TestObjectStorageKeyResource_importSetsStoreAndKeyID(t *testing.T) {
+	r := internalprovider.NewObjectStorageKeyResource().(resource.ResourceWithImportState)
+	schResp := objectStorageKeySchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	importReq := resource.ImportStateRequest{ID: "store-1/key-1"}
+	importResp := &resource.ImportStateResponse{
+		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, objectStorageKeyValues(t, schResp, "", "", "", ""))},
+	}
+	r.ImportState(context.Background(), importReq, importResp)
+	if importResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", importResp.Diagnostics)
+	}
+	var got objectStorageKeyStateModel
+	if diags := importResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.ObjectStorage.ValueString() != "store-1" || got.ID.ValueString() != "key-1" {
+		t.Fatalf("imported object_storage/id = %q/%q, want store-1/key-1", got.ObjectStorage.ValueString(), got.ID.ValueString())
+	}
 }
 
 func objectStorageRawWithPlan(t *testing.T, schResp resource.SchemaResponse, id string, planSlug string, sizeGB *int64, size *int64) tftypes.Value {
@@ -344,6 +600,45 @@ func TestObjectStorageResource_createHappyPath(t *testing.T) {
 	}
 	if got.Size.ValueInt64() != 100 {
 		t.Errorf("Size = %d, want 100", got.Size.ValueInt64())
+	}
+}
+
+func TestObjectStorageResource_createUsesOfferingStorageWhenTopLevelSizeMissing(t *testing.T) {
+	svc := &fakeObjectStorageService{
+		created: &objectstorage.ObjectStorage{
+			Slug:   "assets-x1",
+			Name:   "assets",
+			Status: "Active",
+			Offering: &objectstorage.Offering{
+				Storage: json.Number("100"),
+			},
+		},
+	}
+	planSvc := &fakeObjectStoragePlanLister{
+		plans: []plan.Plan{
+			testObjectStoragePlan("o1100g", json.Number("100"), "sc-nvme"),
+		},
+	}
+	r := internalprovider.NewObjectStorageResourceWithServices(svc, planSvc, defaultObjectStorageCategoryLister())
+	schResp := objectStorageSchema(t)
+	tfType := schResp.Schema.Type().TerraformType(context.Background())
+	size := int64(100)
+	createReq := resource.CreateRequest{
+		Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: objectStorageRaw(t, schResp, "", &size, nil)},
+	}
+	createResp := &resource.CreateResponse{
+		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)},
+	}
+	r.Create(context.Background(), createReq, createResp)
+	if createResp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	}
+	var got objectStorageStateModel
+	if diags := createResp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.Size.ValueInt64() != 100 {
+		t.Errorf("Size = %d, want 100 from offering.storage", got.Size.ValueInt64())
 	}
 }
 

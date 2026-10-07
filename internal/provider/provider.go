@@ -143,6 +143,7 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewLoadBalancerRuleResource,
 		NewLoadBalancerAttachmentResource,
 		NewObjectStorageResource,
+		NewObjectStorageKeyResource,
 		NewObjectStorageBucketResource,
 		NewObjectStorageBucketVersioningResource,
 		NewObjectStorageBucketPolicyResource,
