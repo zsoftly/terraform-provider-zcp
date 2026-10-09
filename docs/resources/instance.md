@@ -19,8 +19,8 @@ model:
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template
   change reprovisions the disk), and the other create-only inputs (`project`,
   `ssh_key`, `network`, `network_plan`, `network_type`, `vr_plan`, `networks`,
-  `default_network`, `assign_public_ip`, `storage_category`, `cpu`,
-  `memory_gb`, `disk_gb`).
+  `default_network`, `assign_public_ip`, `storage_category`, `cpu`, `memory_gb`,
+  `disk_gb`).
 
 Set either a fixed catalogue `plan`, or omit `plan` and set all custom VM plan
 inputs: `cpu`, `memory_gb`, and `disk_gb`. Custom memory and disk values are in
