@@ -31,7 +31,7 @@ var _ resource.ResourceWithValidateConfig = &loadBalancerResource{}
 // service-cancellation workflow), never the raw DELETE /load-balancers/{slug},
 // which returns success but does not reliably remove the LB.
 type loadBalancerServiceIface interface {
-	List(ctx context.Context, region, project string) ([]loadbalancer.LoadBalancer, error)
+	Get(ctx context.Context, slug string) (*loadbalancer.LoadBalancer, error)
 	Create(ctx context.Context, req loadbalancer.CreateRequest) (*loadbalancer.LoadBalancer, error)
 	Cancel(ctx context.Context, slug, billingCycle string) error
 	CreateRule(ctx context.Context, lbSlug string, req loadbalancer.CreateRuleRequest) error
@@ -309,9 +309,7 @@ func (r *loadBalancerResource) applyLBState(model *loadBalancerResourceModel, lb
 			break
 		}
 	}
-	if !ruleID.IsNull() || model.RuleID.IsUnknown() {
-		model.RuleID = ruleID
-	}
+	model.RuleID = ruleID
 }
 
 func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -376,30 +374,16 @@ func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRe
 		return
 	}
 
-	// The create response can omit nested relations (rules, IP). Refresh from the
-	// list so rule_id and public_ip are populated in the initial state.
+	// The create response can omit nested relations (rules, IP). Refresh the
+	// created load balancer so rule_id and public_ip are populated in the initial state.
 	if len(lb.Rules) == 0 || lb.IPAddress == nil {
-		if full := r.findLB(ctx, lb.Slug, model.Region.ValueString(), r.projectOrDefault(model.Project)); full != nil {
+		if full, err := r.svc.Get(ctx, lb.Slug); err == nil && full != nil {
 			lb = full
 		}
 	}
 
 	r.applyLBState(&model, lb)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
-}
-
-// findLB returns the load balancer with the given slug, or nil when unavailable.
-func (r *loadBalancerResource) findLB(ctx context.Context, slug, region, project string) *loadbalancer.LoadBalancer {
-	lbs, err := r.svc.List(ctx, region, project)
-	if err != nil {
-		return nil
-	}
-	for i := range lbs {
-		if lbs[i].Slug == slug {
-			return &lbs[i]
-		}
-	}
-	return nil
 }
 
 func (r *loadBalancerResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -413,25 +397,20 @@ func (r *loadBalancerResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 
-	lbs, err := r.svc.List(ctx, model.Region.ValueString(), r.projectOrDefault(model.Project))
+	lb, err := r.svc.Get(ctx, model.ID.ValueString())
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to read load balancer", err.Error())
 		return
 	}
-
-	slug := model.ID.ValueString()
-	for i := range lbs {
-		if lbs[i].Slug == slug {
-			lb := &lbs[i]
-			model.Name = types.StringValue(lb.Name)
-			r.applyLBState(&model, lb)
-			// cloud_provider, network, plan, billing_cycle, ip config, and the
-			// initial rule inputs are write-only; preserved from state.
-			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
-			return
-		}
-	}
-	resp.State.RemoveResource(ctx)
+	model.Name = types.StringValue(lb.Name)
+	r.applyLBState(&model, lb)
+	// cloud_provider, network, plan, billing_cycle, ip config, and the
+	// initial rule inputs are write-only; preserved from state.
+	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
 func (r *loadBalancerResource) Update(_ context.Context, _ resource.UpdateRequest, _ *resource.UpdateResponse) {
@@ -494,21 +473,19 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 	// same apply (e.g. a VM destroyed together with the LB): it returns 200 but never
 	// removes the LB. A repeated cancel unsticks it, so the poll keeps requesting it.
 	if err := pollUntilGone(deleteCtx, pollInterval, func(ctx context.Context) (bool, error) {
-		lbs, err := r.svc.List(ctx, region, project)
-		if apierrors.IsNotFound(err) {
+		lb, err := r.svc.Get(ctx, slug)
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
 		}
 		if err != nil {
 			return false, err
 		}
-		for i := range lbs {
-			if lbs[i].Slug == slug {
-				if cerr := r.svc.Cancel(ctx, slug, billingCycle); cerr != nil &&
-					!apierrors.IsNotFound(cerr) && !apierrors.IsResourceNotFound(cerr) {
-					return false, cerr
-				}
-				return true, nil
+		if lb != nil {
+			if cerr := r.svc.Cancel(ctx, slug, billingCycle); cerr != nil &&
+				!apierrors.IsNotFound(cerr) && !apierrors.IsResourceNotFound(cerr) {
+				return false, cerr
 			}
+			return true, nil
 		}
 		return false, nil
 	}); err != nil {
@@ -535,19 +512,17 @@ func (r *loadBalancerResource) Delete(ctx context.Context, req resource.DeleteRe
 // releasableLBIP returns the LB's public-IP slug when it is safe to release on
 // destroy: a dedicated IP the LB acquired. It returns "" (with no error) for a
 // network source-NAT IP (owned by the network) or an absent IP, so a source-NAT is
-// never released. A discovery error (LB list or IP list) is returned to the caller
+// never released. A discovery error (LB detail or IP list) is returned to the caller
 // rather than swallowed into "", so destroy stops instead of orphaning the IP.
 func (r *loadBalancerResource) releasableLBIP(ctx context.Context, slug, region, project string) (string, error) {
-	lbs, err := r.svc.List(ctx, region, project)
-	if err != nil {
-		return "", fmt.Errorf("listing load balancers to resolve %s's IP: %w", slug, err)
+	lb, err := r.svc.Get(ctx, slug)
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		// The load balancer already disappeared before destroy began. Its public
+		// IP cannot be identified safely, but cancellation remains idempotent.
+		return "", nil
 	}
-	var lb *loadbalancer.LoadBalancer
-	for i := range lbs {
-		if lbs[i].Slug == slug {
-			lb = &lbs[i]
-			break
-		}
+	if err != nil {
+		return "", fmt.Errorf("getting load balancer %s's IP: %w", slug, err)
 	}
 	if lb == nil || lb.IPAddress == nil || lb.IPAddress.Slug == "" {
 		return "", nil

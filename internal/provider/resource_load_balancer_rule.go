@@ -124,16 +124,6 @@ func (r *loadBalancerRuleResource) Configure(_ context.Context, req resource.Con
 	r.svc = &loadBalancerService{Service: loadbalancer.NewService(pd.Client), client: pd.Client}
 }
 
-// findLBBySlug scans the account-wide list for the given load balancer.
-func findLBBySlug(lbs []loadbalancer.LoadBalancer, slug string) *loadbalancer.LoadBalancer {
-	for i := range lbs {
-		if lbs[i].Slug == slug {
-			return &lbs[i]
-		}
-	}
-	return nil
-}
-
 func (r *loadBalancerRuleResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var model loadBalancerRuleResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
@@ -166,16 +156,11 @@ func (r *loadBalancerRuleResource) Create(ctx context.Context, req resource.Crea
 		return
 	}
 
-	// The create endpoint returns no rule body; resolve the ID from the list by
-	// name + ports.
-	lbs, err := r.svc.List(ctx, "", "")
+	// The create endpoint returns no rule body. Resolve the ID from the detail
+	// response by matching the name and ports.
+	lb, err := r.svc.Get(ctx, lbSlug)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to resolve created load balancer rule", err.Error())
-		return
-	}
-	lb := findLBBySlug(lbs, lbSlug)
-	if lb == nil {
-		resp.Diagnostics.AddError("Failed to resolve created load balancer rule", fmt.Sprintf("load balancer %q not found after rule create.", lbSlug))
 		return
 	}
 	for _, rule := range lb.Rules {
@@ -202,14 +187,13 @@ func (r *loadBalancerRuleResource) Read(ctx context.Context, req resource.ReadRe
 		return
 	}
 
-	lbs, err := r.svc.List(ctx, "", "")
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to read load balancer rule", err.Error())
+	lb, err := r.svc.Get(ctx, model.LoadBalancer.ValueString())
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		resp.State.RemoveResource(ctx)
 		return
 	}
-	lb := findLBBySlug(lbs, model.LoadBalancer.ValueString())
-	if lb == nil {
-		resp.State.RemoveResource(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read load balancer rule", err.Error())
 		return
 	}
 
@@ -267,16 +251,12 @@ func (r *loadBalancerRuleResource) Delete(ctx context.Context, req resource.Dele
 	}
 
 	if err := pollUntilGone(deleteCtx, 5*time.Second, func(ctx context.Context) (bool, error) {
-		lbs, err := r.svc.List(ctx, "", "")
-		if apierrors.IsNotFound(err) {
+		lb, err := r.svc.Get(ctx, lbSlug)
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
 			return false, nil
 		}
 		if err != nil {
 			return false, err
-		}
-		lb := findLBBySlug(lbs, lbSlug)
-		if lb == nil {
-			return false, nil
 		}
 		for _, rule := range lb.Rules {
 			if rule.ID == ruleID {

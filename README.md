@@ -16,7 +16,7 @@ store's S3-compatible gateway through the same SDK. The SDK resolves the gateway
 endpoint from the selected object-storage instance, without a hardcoded regional
 endpoint. The provider uses the [zcp CLI](https://github.com/zsoftly/zcp-cli).
 
-43 resources and 13 data sources. Full reference under [docs/](docs/), runnable
+44 resources and 14 data sources. Full reference under [docs/](docs/), runnable
 configurations under [examples/](examples/).
 
 ## Requirements
@@ -31,7 +31,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 0.2.0"
+      version = "~> 0.3.0"
     }
   }
 }

@@ -13,13 +13,21 @@ open. Terraform stores `api_secret` in state after create and preserves that
 state value on later refreshes when the API no longer returns the secret. Treat
 Terraform state for this resource as sensitive.
 
+The platform keeps one or two active keys per store. Create a replacement key,
+update consumers to use it, then revoke the old key in a later apply. This
+resource does not revoke another key during rotation.
+
 ## Example Usage
 
 ```terraform
+data "zcp_region" "yow" {
+  slug = "yow-1"
+}
+
 resource "zcp_object_storage" "assets" {
   name             = "assets"
-  cloud_provider   = "ceph"
-  region           = "os-yow"
+  cloud_provider   = data.zcp_region.yow.cloud_provider
+  region           = data.zcp_region.yow.slug
   billing_cycle    = "hourly"
   storage_category = "hdd-storage"
   size_gb          = 100
@@ -30,11 +38,11 @@ resource "zcp_object_storage_key" "assets" {
 }
 ```
 
-Bucket configuration resources such as
-`zcp_object_storage_bucket_versioning`, `zcp_object_storage_bucket_policy`,
-`zcp_object_storage_bucket_tagging`, `zcp_object_storage_bucket_lifecycle`, and
-`zcp_object_storage_bucket_cors` use the S3 gateway. Export the key values for
-the provider process when you manage those settings:
+Bucket configuration resources such as `zcp_object_storage_bucket_versioning`,
+`zcp_object_storage_bucket_policy`, `zcp_object_storage_bucket_tagging`,
+`zcp_object_storage_bucket_lifecycle`, and `zcp_object_storage_bucket_cors` use
+the S3 gateway. Export the key values for the provider process when you manage
+those settings:
 
 ```shell
 export ZCP_S3_ACCESS_KEY="<api_key>"

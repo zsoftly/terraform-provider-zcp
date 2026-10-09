@@ -181,6 +181,7 @@ func (p *ZCPProvider) DataSources(_ context.Context) []func() datasource.DataSou
 		NewKubernetesVersionDataSource,
 		NewInstanceDataSource,
 		NewVolumeDataSource,
+		NewLoadBalancerDataSource,
 		NewPermissionsDataSource,
 	}
 }

@@ -52,14 +52,24 @@ type fakeLoadBalancerService struct {
 	rulesGone           []string
 	attachReqs          []loadbalancer.AttachVMRequest
 	detachedVMs         []string
-	listRegion          string
-	listProject         string
+	getCalls            []string
+	getErr              error
 }
 
-func (f *fakeLoadBalancerService) List(_ context.Context, region, project string) ([]loadbalancer.LoadBalancer, error) {
-	f.listRegion = region
-	f.listProject = project
-	return f.lbs, f.err
+func (f *fakeLoadBalancerService) Get(_ context.Context, slug string) (*loadbalancer.LoadBalancer, error) {
+	f.getCalls = append(f.getCalls, slug)
+	if f.getErr != nil {
+		return nil, f.getErr
+	}
+	if f.err != nil {
+		return nil, f.err
+	}
+	for i := range f.lbs {
+		if f.lbs[i].Slug == slug {
+			return &f.lbs[i], nil
+		}
+	}
+	return nil, &apierrors.APIError{StatusCode: 404, Message: "not found"}
 }
 func (f *fakeLoadBalancerService) Create(_ context.Context, req loadbalancer.CreateRequest) (*loadbalancer.LoadBalancer, error) {
 	f.createReq = req
@@ -495,6 +505,33 @@ func TestLoadBalancerResource_readNotFound(t *testing.T) {
 	}
 }
 
+func TestLoadBalancerResource_readErrorPreservesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: errors.New("service unavailable")}
+	resp := readLB(t, svc, "web-lb-a1b2")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error on failed detail read, got none")
+	}
+	if resp.State.Raw.IsNull() {
+		t.Fatal("expected failed detail read to preserve state")
+	}
+}
+
+func TestLoadBalancerResource_readMissing403RemovesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 403, Message: "The provided load balancer is invalid."}}
+	resp := readLB(t, svc, "web-lb-a1b2")
+	if resp.Diagnostics.HasError() || !resp.State.Raw.IsNull() {
+		t.Fatalf("diagnostics = %v, state = %#v; want missing 403 to remove state", resp.Diagnostics, resp.State.Raw)
+	}
+}
+
+func TestLoadBalancerResource_readForbiddenPreservesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 403, Message: "Access denied."}}
+	resp := readLB(t, svc, "web-lb-a1b2")
+	if !resp.Diagnostics.HasError() || resp.State.Raw.IsNull() {
+		t.Fatalf("diagnostics = %v, state = %#v; want forbidden error with preserved state", resp.Diagnostics, resp.State.Raw)
+	}
+}
+
 func TestLoadBalancerResource_deleteHappyPath(t *testing.T) {
 	svc := &fakeLoadBalancerService{
 		lbs: []loadbalancer.LoadBalancer{{Slug: "web-lb-a1b2"}},
@@ -517,6 +554,26 @@ func TestLoadBalancerResource_delete404IsNoOp(t *testing.T) {
 	resp := deleteLB(t, svc, "web-lb-a1b2")
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("404 on delete should be a no-op: %v", resp.Diagnostics)
+	}
+}
+
+func TestLoadBalancerResource_deleteAlreadyGoneSkipsIPLookup(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 404, Message: "not found"}}
+	ipSvc := &fakeLBIPService{}
+	resp := deleteLBIP(t, svc, ipSvc, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("already-deleted load balancer should not block destroy: %v", resp.Diagnostics)
+	}
+	if len(ipSvc.released) != 0 {
+		t.Errorf("released = %v, want no IP release when the LB was already gone", ipSvc.released)
+	}
+}
+
+func TestLoadBalancerResource_deleteMissing403IsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 403, Message: "The provided load balancer is invalid."}}
+	resp := deleteLB(t, svc, "web-lb-a1b2")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("missing 403 on detail lookup should not block destroy: %v", resp.Diagnostics)
 	}
 }
 
@@ -637,6 +694,30 @@ func TestLoadBalancerRuleResource_readGoneRemoves(t *testing.T) {
 	}
 }
 
+func TestLoadBalancerRuleResource_readErrorPreservesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: errors.New("service unavailable")}
+	r := internalprovider.NewLoadBalancerRuleResourceWithService(svc)
+	schResp := lbRuleSchema(t)
+	stateVal := lbRuleRaw(t, schResp, "rule-2", "web-lb-a1b2", "http", "80", "8080")
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, readResp)
+	if !readResp.Diagnostics.HasError() || readResp.State.Raw.IsNull() {
+		t.Fatalf("diagnostics = %v, state = %#v; want error with preserved state", readResp.Diagnostics, readResp.State.Raw)
+	}
+}
+
+func TestLoadBalancerRuleResource_readMissing403RemovesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 403, Message: "The provided load balancer is invalid."}}
+	r := internalprovider.NewLoadBalancerRuleResourceWithService(svc)
+	schResp := lbRuleSchema(t)
+	stateVal := lbRuleRaw(t, schResp, "rule-2", "web-lb-a1b2", "http", "80", "8080")
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, readResp)
+	if readResp.Diagnostics.HasError() || !readResp.State.Raw.IsNull() {
+		t.Fatalf("diagnostics = %v, state = %#v; want missing 403 to remove state", readResp.Diagnostics, readResp.State.Raw)
+	}
+}
+
 func TestLoadBalancerRuleResource_deleteHappyPath(t *testing.T) {
 	svc := &fakeLoadBalancerService{
 		lbs: []loadbalancer.LoadBalancer{
@@ -732,9 +813,21 @@ func TestLoadBalancerAttachmentResource_readRuleGoneRemoves(t *testing.T) {
 	}
 }
 
-func TestLoadBalancerAttachmentResource_readUsesProjectScope(t *testing.T) {
-	// Read must resolve the project the same way Create does; an unscoped
-	// list could miss the LB and wrongly drop the attachment from state.
+func TestLoadBalancerAttachmentResource_readMissing403RemovesState(t *testing.T) {
+	svc := &fakeLoadBalancerService{getErr: &apierrors.APIError{StatusCode: 403, Message: "The provided load balancer is invalid."}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	readResp := &resource.ReadResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}
+	r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, readResp)
+	if readResp.Diagnostics.HasError() || !readResp.State.Raw.IsNull() {
+		t.Fatalf("diagnostics = %v, state = %#v; want missing 403 to remove state", readResp.Diagnostics, readResp.State.Raw)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_readUsesDetailEndpoint(t *testing.T) {
+	// The detail endpoint is addressed by the known load balancer slug, so it
+	// avoids a collection lookup and retains the attachment when its rule exists.
 	svc := &fakeLoadBalancerService{
 		lbs: []loadbalancer.LoadBalancer{
 			{Slug: "web-lb-a1b2", Rules: []loadbalancer.Rule{{ID: "rule-1"}}},
@@ -752,11 +845,8 @@ func TestLoadBalancerAttachmentResource_readUsesProjectScope(t *testing.T) {
 	if readResp.State.Raw.IsNull() {
 		t.Fatal("attachment was dropped from state although LB and rule exist")
 	}
-	if svc.listProject != "default-9" {
-		t.Errorf("List called with project %q, want %q (provider default)", svc.listProject, "default-9")
-	}
-	if svc.listRegion != "yow-1" {
-		t.Errorf("List called with region %q, want yow-1 (from state)", svc.listRegion)
+	if len(svc.getCalls) != 1 || svc.getCalls[0] != "web-lb-a1b2" {
+		t.Errorf("Get calls = %v, want [web-lb-a1b2]", svc.getCalls)
 	}
 }
 
@@ -773,5 +863,47 @@ func TestLoadBalancerAttachmentResource_deleteDetaches(t *testing.T) {
 	}
 	if len(svc.detachedVMs) != 1 || svc.detachedVMs[0] != "vm1-abc" {
 		t.Errorf("DetachVM called with %v, want [vm1-abc]", svc.detachedVMs)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_deleteAbsentAttachmentIsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
+		StatusCode: 403,
+		Message:    "The provided virtual machine is invalid or not assigned to the load balancer rule.",
+	}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("missing attachment should not block destroy: %v", deleteResp.Diagnostics)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_deleteResourceNotFoundIsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
+		StatusCode: 403,
+		Message:    "The provided virtual machine is invalid.",
+	}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("missing attachment resource should not block destroy: %v", deleteResp.Diagnostics)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_deleteForbiddenFails(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{StatusCode: 403, Message: "Access denied."}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if !deleteResp.Diagnostics.HasError() {
+		t.Fatal("forbidden detach must retain the attachment by returning an error")
 	}
 }

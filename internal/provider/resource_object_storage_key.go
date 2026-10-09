@@ -143,21 +143,23 @@ func (r *objectStorageKeyResource) Create(ctx context.Context, req resource.Crea
 		resp.Diagnostics.AddError("Failed to create object storage key", "the API accepted the create but returned no key ID; check the object storage key list before retrying.")
 		return
 	}
-	if key.APISecret == "" || objectstorage.IsEncryptedSecret(key.APISecret) {
+	capturedAt := time.Now()
+	if !hasNewObjectStorageKeyCredentials(key, capturedAt) {
 		creds, cerr := r.svc.GetCredentialsForKey(ctx, model.ObjectStorage.ValueString(), key.ID)
 		if cerr == nil && creds != nil {
-			key.APIKey = firstNonEmpty(key.APIKey, creds.APIKey)
+			key.APIKey = creds.APIKey
 			key.APISecret = creds.APISecret
-			key.SecretVisibleUntil = firstNonEmpty(key.SecretVisibleUntil, creds.SecretVisibleUntil)
+			key.SecretVisibleUntil = creds.SecretVisibleUntil
+			capturedAt = time.Now()
 		}
 	}
-	if key.APISecret == "" || objectstorage.IsEncryptedSecret(key.APISecret) {
+	if !hasNewObjectStorageKeyCredentials(key, capturedAt) {
 		r.cleanupCreatedKeyAfterSecretFailure(model.ObjectStorage.ValueString(), key.ID, resp)
-		resp.Diagnostics.AddError("Object storage key secret not visible", "the key was created, but the API did not return a plaintext secret. Terraform attempted to revoke the new key before returning this error. If cleanup failed, revoke the key in ZCP before retrying so Terraform can store the secret in state.")
+		resp.Diagnostics.AddError("Object storage key credentials not visible", "The key was created, but the API did not return a plaintext access-key and secret-key pair with a future visibility time. Terraform attempted to revoke the key before returning this error. If cleanup failed, revoke the key in ZCP before retrying so Terraform can store the credentials in state.")
 		return
 	}
 
-	applyObjectStorageKeyState(&model, key, false)
+	applyObjectStorageKeyState(&model, key, false, capturedAt)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 }
 
@@ -192,9 +194,14 @@ func (r *objectStorageKeyResource) Read(ctx context.Context, req resource.ReadRe
 		resp.Diagnostics.AddError("Failed to read object storage key", err.Error())
 		return
 	}
+	capturedAt := time.Now()
 	for i := range keys {
 		if keys[i].ID == model.ID.ValueString() {
-			applyObjectStorageKeyState(&model, &keys[i], true)
+			if strings.EqualFold(keys[i].Status, "revoked") {
+				resp.State.RemoveResource(ctx)
+				return
+			}
+			applyObjectStorageKeyState(&model, &keys[i], true, capturedAt)
 			resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 			return
 		}
@@ -241,12 +248,12 @@ func (r *objectStorageKeyResource) ImportState(ctx context.Context, req resource
 	importPositional(ctx, req, resp, fields, 2, "<object_storage>/<key_id>")
 }
 
-func applyObjectStorageKeyState(model *objectStorageKeyResourceModel, key *objectstorage.Key, preserveSecret bool) {
+func applyObjectStorageKeyState(model *objectStorageKeyResourceModel, key *objectstorage.Key, preserveSecret bool, capturedAt time.Time) {
 	model.ID = types.StringValue(key.ID)
 	if key.APIKey != "" {
 		model.APIKey = types.StringValue(key.APIKey)
 	}
-	if key.APISecret != "" && !objectstorage.IsEncryptedSecret(key.APISecret) {
+	if hasNewObjectStorageKeyCredentials(key, capturedAt) {
 		model.APISecret = types.StringValue(key.APISecret)
 	} else if !preserveSecret || model.APISecret.IsUnknown() {
 		model.APISecret = types.StringNull()
@@ -260,6 +267,17 @@ func applyObjectStorageKeyState(model *objectStorageKeyResourceModel, key *objec
 	model.SecretVisibleUntil = nullableString(key.SecretVisibleUntil)
 	model.CreatedAt = nullableString(key.CreatedAt)
 	model.UpdatedAt = nullableString(key.UpdatedAt)
+}
+
+// hasNewObjectStorageKeyCredentials reports whether a response still discloses a
+// complete plaintext key pair. Visibility controls new disclosure. It does not
+// invalidate a plaintext secret already stored in Terraform state.
+func hasNewObjectStorageKeyCredentials(key *objectstorage.Key, capturedAt time.Time) bool {
+	if key == nil || !strings.EqualFold(key.Status, "active") || key.APIKey == "" || key.APISecret == "" || objectstorage.IsEncryptedSecret(key.APISecret) {
+		return false
+	}
+	visibleUntil, err := time.Parse(time.RFC3339, key.SecretVisibleUntil)
+	return err == nil && visibleUntil.After(capturedAt)
 }
 
 func nullableString(v string) types.String {

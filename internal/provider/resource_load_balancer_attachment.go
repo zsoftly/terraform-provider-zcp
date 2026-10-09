@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ import (
 var _ resource.Resource = &loadBalancerAttachmentResource{}
 var _ resource.ResourceWithConfigure = &loadBalancerAttachmentResource{}
 var _ resource.ResourceWithImportState = &loadBalancerAttachmentResource{}
+
+const loadBalancerAttachmentAbsentMessage = "The provided virtual machine is invalid or not assigned to the load balancer rule."
 
 type loadBalancerAttachmentResource struct {
 	svc            loadBalancerServiceIface
@@ -167,18 +170,13 @@ func (r *loadBalancerAttachmentResource) Read(ctx context.Context, req resource.
 	// The API does not expose rule membership, so the attachment itself cannot
 	// be verified. Drop the resource when its parent rule or LB is gone; keep
 	// state as-is otherwise.
-	project := r.defaultProject
-	if !model.Project.IsNull() && !model.Project.IsUnknown() {
-		project = model.Project.ValueString()
-	}
-	lbs, err := r.svc.List(ctx, model.Region.ValueString(), project)
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to read load balancer attachment", err.Error())
+	lb, err := r.svc.Get(ctx, model.LoadBalancer.ValueString())
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		resp.State.RemoveResource(ctx)
 		return
 	}
-	lb := findLBBySlug(lbs, model.LoadBalancer.ValueString())
-	if lb == nil {
-		resp.State.RemoveResource(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read load balancer attachment", err.Error())
 		return
 	}
 	ruleID := model.Rule.ValueString()
@@ -215,9 +213,19 @@ func (r *loadBalancerAttachmentResource) Delete(ctx context.Context, req resourc
 	defer cancel()
 
 	err := r.svc.DetachVM(deleteCtx, model.LoadBalancer.ValueString(), model.Rule.ValueString(), model.VirtualMachine.ValueString())
-	if err != nil && !apierrors.IsNotFound(err) {
+	if err != nil && !isLoadBalancerAttachmentAbsent(err) {
 		resp.Diagnostics.AddError("Failed to detach instance from load balancer rule", err.Error())
 	}
+}
+
+func isLoadBalancerAttachmentAbsent(err error) bool {
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		return true
+	}
+	var apiErr *apierrors.APIError
+	return errors.As(err, &apiErr) &&
+		apiErr.StatusCode == 403 &&
+		apiErr.Message == loadBalancerAttachmentAbsentMessage
 }
 
 // ImportState accepts a composite ID seeding the attachment triple plus the

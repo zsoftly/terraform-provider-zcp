@@ -1,3 +1,7 @@
+// These S3 configuration resources use ZCP_S3_ACCESS_KEY and ZCP_S3_SECRET_KEY
+// from the provider process. Create a zcp_object_storage_key first, export its
+// sensitive values in a separate step, then apply this configuration.
+
 resource "zcp_object_storage_bucket_versioning" "assets" {
   object_storage = zcp_object_storage.assets.id
   bucket         = zcp_object_storage_bucket.assets.id
