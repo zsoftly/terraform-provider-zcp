@@ -16,6 +16,7 @@ import (
 
 func TestLoadBalancerResourceReadUsesDetailEndpoint(t *testing.T) {
 	status := http.StatusOK
+	rules := []loadbalancer.Rule{{ID: "rule-1", Name: "https", PublicPort: "443", PrivatePort: "8443"}}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/load-balancers" {
 			t.Error("resource read must not request the load balancer collection")
@@ -38,7 +39,7 @@ func TestLoadBalancerResourceReadUsesDetailEndpoint(t *testing.T) {
 			"status": "Success",
 			"data": loadbalancer.LoadBalancer{
 				Slug: "web-lb-a1b2", Name: "web-lb", State: "Active",
-				Rules: []loadbalancer.Rule{{ID: "rule-1", Name: "https", PublicPort: "443", PrivatePort: "8443"}},
+				Rules: rules,
 			},
 		})
 	}))
@@ -74,6 +75,24 @@ func TestLoadBalancerResourceReadUsesDetailEndpoint(t *testing.T) {
 		}
 	})
 
+	t.Run("missing initial rule clears rule ID", func(t *testing.T) {
+		status = http.StatusOK
+		rules = []loadbalancer.Rule{{ID: "rule-2", Name: "https", PublicPort: "443", PrivatePort: "8443"}}
+		missingState := loadBalancerReadStateWithRule(t, schemaResp, "web-lb-a1b2", "http", "stale-http-rule")
+		resp := resource.ReadResponse{State: tfsdk.State{Schema: schemaResp.Schema, Raw: missingState}}
+		r.Read(context.Background(), resource.ReadRequest{State: tfsdk.State{Schema: schemaResp.Schema, Raw: missingState}}, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("read diagnostics = %v", resp.Diagnostics)
+		}
+		var model loadBalancerResourceModel
+		if diags := resp.State.Get(context.Background(), &model); diags.HasError() {
+			t.Fatalf("reading state: %v", diags)
+		}
+		if !model.RuleID.IsNull() {
+			t.Errorf("rule ID = %q, want null after the initial rule is absent", model.RuleID.ValueString())
+		}
+	})
+
 	t.Run("later error preserves state", func(t *testing.T) {
 		status = http.StatusServiceUnavailable
 		resp := resource.ReadResponse{State: tfsdk.State{Schema: schemaResp.Schema, Raw: state}}
@@ -85,6 +104,10 @@ func TestLoadBalancerResourceReadUsesDetailEndpoint(t *testing.T) {
 }
 
 func loadBalancerReadState(t *testing.T, schemaResp resource.SchemaResponse, id string) tftypes.Value {
+	return loadBalancerReadStateWithRule(t, schemaResp, id, "https", "")
+}
+
+func loadBalancerReadStateWithRule(t *testing.T, schemaResp resource.SchemaResponse, id, ruleName, ruleID string) tftypes.Value {
 	t.Helper()
 	tfType := schemaResp.Schema.Type().TerraformType(context.Background())
 	obj := tfType.(tftypes.Object)
@@ -94,6 +117,9 @@ func loadBalancerReadState(t *testing.T, schemaResp resource.SchemaResponse, id 
 	}
 	values["id"] = tftypes.NewValue(tftypes.String, id)
 	values["name"] = tftypes.NewValue(tftypes.String, "web-lb")
-	values["rule_name"] = tftypes.NewValue(tftypes.String, "https")
+	values["rule_name"] = tftypes.NewValue(tftypes.String, ruleName)
+	if ruleID != "" {
+		values["rule_id"] = tftypes.NewValue(tftypes.String, ruleID)
+	}
 	return tftypes.NewValue(tfType, values)
 }

@@ -5,7 +5,7 @@ default: build
 BINARY    = terraform-provider-zcp
 NAMESPACE = zsoftly
 NAME      = zcp
-VERSION   = 0.1.0
+VERSION   = 0.3.0
 OS_ARCH   = $(shell go env GOOS)_$(shell go env GOARCH)
 
 # OpenTofu (primary)

@@ -1,15 +1,12 @@
-# terraform-provider-zcp Release Notes
+# terraform-provider-zcp v0.3.0 Release Notes
 
-## Unreleased
-
-This release updates the provider to the zcp-cli SDK v0.0.31.
+v0.3.0 updates the provider to the zcp-cli SDK v0.0.31.
 
 - ACL rule refreshes and post-create ID lookup retrieve every API page. Rules
   beyond the API's default page size remain in Terraform state, and a failed
   later page reports an error instead of removing a rule from state.
 - The selected Go toolchain is now 1.26.9, and `golang.org/x/net` is now
   v0.60.0. These updates include security fixes.
-
 - `zcp_instance` supports custom VM plans with `cpu`, `memory_gb`, and
   `disk_gb`. Fixed catalogue plans continue to use `plan`; custom inputs and
   `plan` are mutually exclusive.
@@ -24,217 +21,37 @@ This release updates the provider to the zcp-cli SDK v0.0.31.
 - Load-balancer resources use the detail endpoint to refresh state and resolve
   rule IDs. During destroy, the provider treats an already absent load balancer
   as deleted.
+- Load-balancer refresh clears `rule_id` when the detail response no longer
+  contains the configured initial rule. Attachment destroy treats the exact 403
+  response stating that the VM is invalid or not assigned to the rule as already
+  detached while reporting other forbidden responses.
 - Object storage reads support the current API storage-size response shape.
-- Bucket configuration resources continue to manage S3 gateway settings, but the
-  provider process must now have `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` set
-  to an active key for the store.
+- Bucket configuration resources manage S3 gateway settings when the provider
+  process has `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` for an active store
+  key.
 
----
+## Live validation
 
-## v0.2.0 (2026-09-07)
+On 2026-10-09, live Terraform validation covered ACL rule refresh across a rule
+set expanded beyond the default page size, with zero changes on a second plan.
+It also covered a custom 2 CPU, 2 GB memory, 20 GB disk instance; object-storage
+key and bucket configuration create, refresh, and destroy; and load-balancer
+creation, an additional rule, and the load-balancer data source.
 
-This release adds VPC instance configuration, volume data sources, and improved
-delete handling. It uses the zcp-cli SDK v0.0.29.
+The object-storage key test confirmed that the credential pair already in state
+remained unchanged after the API disclosure window expired.
 
-- New object storage bucket configuration resources manage versioning, policy,
-  tags, lifecycle expiry, and CORS through the store's S3-compatible gateway.
-  The SDK resolves the gateway endpoint from the selected object-storage
-  instance, without a hardcoded regional endpoint. They obtain gateway
-  credentials internally and do not expose them as resource attributes.
-- The provider serializes configuration writes to the same bucket and retries
-  gateway concurrent-modification responses during an apply.
+The load-balancer API omitted the configured initial rule on a fresh read. The
+attachment create request succeeded, but a subsequent detach request reported
+that the VM was not assigned to the rule. The validation did not confirm traffic
+delivery or attachment membership. No backend cause has been established.
 
-- `zcp_instance` supports VPC networks, multiple existing networks, and
-  virtual-router plans. Plan validation rejects combinations the API does not
-  support.
-- New `data.zcp_volume` looks up a volume by slug. `data.zcp_instance` exposes
-  `root_volume` and `volumes` for attached disks.
-- Volume lookups retrieve every API page within the configured region and
-  project scope. `data.zcp_volume`, `data.zcp_instance.root_volume`, and
-  `data.zcp_instance.volumes` no longer miss results beyond the first page.
-- `zcp_vm_backup` destroy uses the platform cancellation workflow and handles
-  recognized transient polling errors without waiting for the delete timeout on
-  permanent API errors.
-- `zcp_volume_backup` decodes the current backup-list response shape.
-- `zcp_ip_address` reports the correct 422 error when a VPC has no network tier.
-  `zcp_network_acl` docs now describe stateful behavior.
-
-Upgrade your required provider version and run `terraform init -upgrade` or
-`tofu init -upgrade`:
-
-```hcl
-terraform {
-  required_providers {
-    zcp = {
-      source  = "zsoftly/zcp"
-      version = "~> 0.2.0"
-    }
-  }
-}
-```
-
----
-
-## v0.1.3 (2026-07-20)
-
-Fixes `zcp_port_forward` and `zcp_firewall_rule`.
-
-Creating either resource used to record an empty ID. The create endpoint accepts
-the request asynchronously and returns no rule object, so there was no ID to
-store. On the next plan a read failed to find the resource and Terraform tried
-to recreate it every time. Both resources now poll the rule list after create
-and match on protocol and ports (and CIDR for firewall rules) to record the real
-ID and state, so the resource stays stable across plans.
-
-Built on the zcp-cli SDK v0.0.26, which also corrects how port forwarding rule
-ports are decoded from the API.
-
----
-
-## v0.1.2 (2026-07-18)
-
-Adds `MX` record support to `zcp_dns_record`.
-
-- `zcp_dns_record` takes a new `priority` argument (0-65535) for `MX` records.
-  Put the mail server in `content` and the preference number in `priority`.
-  Priority is required for `MX` and rejected for other types, checked at plan
-  time so a mistake fails before apply.
-- Dropped `SRV` from the documented `type` values. The DNS API rejects `SRV` and
-  `LOC` records, so the provider no longer advertises them. `type` stays a
-  free-form string.
-
-Built on the zcp-cli SDK v0.0.25. The record path was verified against the live
-DNS API, and the provider logic is covered by unit tests.
-
----
-
-## v0.1.1 (2026-07-18)
-
-A bug-fix release. Destroying a resource now releases the public IP it created,
-instead of leaving it allocated.
-
-- `zcp_instance` destroy releases the VM's auto-assigned public IP through the
-  service-cancellation workflow. Set `assign_public_ip = false` to create the
-  instance without an auto-assigned public IP.
-- `zcp_load_balancer` destroy deletes the load balancer through the
-  service-cancellation workflow instead of the direct delete endpoint, which
-  could report success without removing it. Destroy waits for the balancer to be
-  gone and re-issues the cancellation if the platform stalls it (which it can do
-  when the balancer's cancellation runs at the same time as another service's
-  teardown). It then releases the public IP the balancer acquired
-  (`acquire_new_ip = true`, the default); if that release fails, destroy fails
-  with an error naming the IP instead of leaving it allocated. A network
-  source-NAT IP is never released, since the network owns it, and a bound
-  `ip_address` is left to its own resource.
-
-Built on the zcp-cli SDK v0.0.24. Verified end to end with Terraform and
-OpenTofu.
-
----
-
-## v0.1.0 (2026-07-07)
-
-First release of the ZCP provider for Terraform and OpenTofu. It manages the
-ZSoftly Cloud Platform with 38 resources and 12 data sources, covering
-everything the `zcp` CLI supports: instances, volumes, snapshots and backups,
-VPCs and networks, firewall and egress rules, load balancers, autoscaling,
-Kubernetes clusters, DNS, object storage, VPN, and account governance.
-
-Built on the zcp-cli SDK v0.0.23. Every resource supports import. We verified
-the core paths against the live platform (create, read, update, delete, and
-zero-diff re-plan).
-
-Highlights:
-
-- **Full platform coverage.** One provider block manages compute, networking,
-  Kubernetes, DNS, storage, and governance. See the [CHANGELOG](CHANGELOG.md)
-  for the complete resource list.
-- **DNS records as record sets.** `zcp_dns_record` matches how the PowerDNS
-  backend works: one resource per name and type pair, no fake record IDs.
-- **In-place Kubernetes changes.** Version upgrades and plan scaling update the
-  cluster instead of replacing it.
-- **DNS defaults.** `zcp_dns_domain` defaults `cloud_provider` to `dns` and
-  `region` to `default`, the only valid combination on the platform.
-- **Plugin protocol 6.** Works with Terraform 1.0 and later and OpenTofu 1.6 and
-  later.
-
----
-
-## Installation and upgrade
-
-Add the provider to your configuration and run `terraform init` or `tofu init`:
-
-```hcl
-terraform {
-  required_providers {
-    zcp = {
-      source  = "zsoftly/zcp"
-      version = "~> 0.1"
-    }
-  }
-}
-
-provider "zcp" {
-  # bearer_token can also come from the ZCP_BEARER_TOKEN environment variable
-  default_project = "default-9"
-}
-```
-
-**Authentication:** set `ZCP_BEARER_TOKEN` in the environment or `bearer_token`
-in the provider block. Generate the token in the
-[ZCP console](https://cloud.zcp.zsoftly.ca) under **Account → API Keys**.
-`ZCP_API_URL` and `ZCP_PROJECT` override the API endpoint and default project.
-
-**Manual install:** download the zip for your platform from the
-[Releases](https://github.com/zsoftly/terraform-provider-zcp/releases) page and
-unpack it into your plugin directory, for example
-`~/.terraform.d/plugins/registry.terraform.io/zsoftly/zcp/0.1.0/<os>_<arch>/`.
-
-**Verify:**
-
-```bash
-terraform init
-terraform providers   # shows provider registry address and version
-```
-
----
-
-## What is included
-
-38 resources and 12 data sources. The groups:
-
-| Area           | Resources                                                                                                                |
-| -------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| Compute        | instance, volume, volume_snapshot, volume_backup, vm_snapshot, vm_backup, affinity_group, iso, account_template, ssh_key |
-| Networking     | vpc, network, network_acl, network_acl_rule, firewall_rule, egress_rule, port_forward, ip_address, ip_association        |
-| Load balancing | load_balancer, load_balancer_rule, load_balancer_attachment                                                              |
-| Autoscaling    | autoscale_group, autoscale_policy, autoscale_condition                                                                   |
-| VPN            | vpc_vpn_gateway, vpn_customer_gateway, vpn_user, remote_access_vpn                                                       |
-| Kubernetes     | kubernetes_cluster                                                                                                       |
-| DNS            | dns_domain, dns_record                                                                                                   |
-| Object storage | object_storage, object_storage_bucket                                                                                    |
-| Governance     | project, sub_user, role, budget_alert                                                                                    |
-
-Data sources: billing_cycle, instance, kubernetes_version, network, permissions,
-plan, project, region, ssh_key, storage_category, template, vpc.
-
-Each resource has a documentation page under `docs/` with its argument
-reference, import format, and a runnable example under `examples/`.
-
-## Known platform behaviors
-
-- Deleting an instance releases its auto-assigned public IP through the
-  service-cancellation workflow, so destroy does not leave a billable address. A
-  public IP bound through `zcp_ip_address`/`zcp_ip_association` is left to its
-  own resource.
-- The platform's cached instance state lags behind reality, sometimes by many
-  minutes. The provider polls the live `/meta` endpoint, which reconciles
-  against the hypervisor, so creates and resizes finish as soon as the VM is up.
-- On some networks, egress rule creation returns success while the backend
-  creates nothing. The provider polls the rule list and fails loudly instead of
-  recording a nonexistent rule.
-- The DNS backend appends the zone to record names. `zcp_dns_record` takes
-  relative names (`www`, not `www.example.com`).
-- `content` on `zcp_dns_record` and `public_key` on `zcp_ssh_key` are write-only
-  because the API does not return them in a comparable form. The provider does
-  not detect out-of-band changes to those fields.
+During cleanup, Terraform attachment cleanup completed after the API reported
+that the VM was already unassigned, and the VM was destroyed. Terraform then
+attempted to delete the remaining additional rule. The API rejected that request
+because a load balancer must retain one active rule. The provider reports this
+error and does not delete the load balancer when only rule destruction was
+requested. The test load balancer and dedicated IP were removed through the CLI.
+Terraform then removed the remaining network. Follow-up API checks found no test
+resources or associated IPs, and all three Terraform states contain no managed
+resources.

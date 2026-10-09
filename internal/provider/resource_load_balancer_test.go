@@ -865,3 +865,45 @@ func TestLoadBalancerAttachmentResource_deleteDetaches(t *testing.T) {
 		t.Errorf("DetachVM called with %v, want [vm1-abc]", svc.detachedVMs)
 	}
 }
+
+func TestLoadBalancerAttachmentResource_deleteAbsentAttachmentIsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
+		StatusCode: 403,
+		Message:    "The provided virtual machine is invalid or not assigned to the load balancer rule.",
+	}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("missing attachment should not block destroy: %v", deleteResp.Diagnostics)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_deleteResourceNotFoundIsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
+		StatusCode: 403,
+		Message:    "The provided virtual machine is invalid.",
+	}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("missing attachment resource should not block destroy: %v", deleteResp.Diagnostics)
+	}
+}
+
+func TestLoadBalancerAttachmentResource_deleteForbiddenFails(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{StatusCode: 403, Message: "Access denied."}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if !deleteResp.Diagnostics.HasError() {
+		t.Fatal("forbidden detach must retain the attachment by returning an error")
+	}
+}

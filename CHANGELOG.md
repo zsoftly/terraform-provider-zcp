@@ -5,7 +5,7 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [v0.3.0] - 2026-10-09
 
 ### Added
 
@@ -34,6 +34,13 @@ to [Semantic Versioning](https://semver.org/).
 - **Load-balancer resources use the detail endpoint to refresh state and resolve
   rule IDs.** During destroy, the provider treats an already absent load
   balancer as deleted.
+- **Load-balancer refresh clears a missing initial rule ID.** When the detail
+  response no longer contains the configured initial rule, the provider removes
+  the stale `rule_id` from state.
+- **Load-balancer attachment destroy handles a confirmed absent attachment.**
+  The provider treats the exact 403 response stating that the VM is invalid or
+  not assigned to the rule as already detached. Other forbidden responses remain
+  errors.
 - **Upgraded the zcp-cli SDK from v0.0.29 to v0.0.30.** Object storage reads now
   support the current API storage-size shape and bucket configuration resources
   use explicit S3 credentials from `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY`.

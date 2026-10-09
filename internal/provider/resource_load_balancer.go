@@ -309,9 +309,7 @@ func (r *loadBalancerResource) applyLBState(model *loadBalancerResourceModel, lb
 			break
 		}
 	}
-	if !ruleID.IsNull() || model.RuleID.IsUnknown() {
-		model.RuleID = ruleID
-	}
+	model.RuleID = ruleID
 }
 
 func (r *loadBalancerResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
