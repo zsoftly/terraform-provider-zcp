@@ -398,6 +398,12 @@ func NewVolumeDataSourceWithListerAndProject(l volumeLister, defaultProject stri
 	return &volumeDataSource{svc: l, defaultProject: defaultProject}
 }
 
+// NewLoadBalancerDataSourceWithGetter creates a loadBalancerDataSource pre-wired
+// with the given getter; available only in test binaries.
+func NewLoadBalancerDataSourceWithGetter(g loadBalancerGetter) datasource.DataSource {
+	return &loadBalancerDataSource{svc: g}
+}
+
 // NewPermissionsDataSourceWithLister creates a permissionsDataSource pre-wired
 // with the given lister; available only in test binaries.
 func NewPermissionsDataSourceWithLister(l permissionLister) datasource.DataSource {

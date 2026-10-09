@@ -16,13 +16,27 @@ to [Semantic Versioning](https://semver.org/).
   revoke S3 access keys for an object storage store. The secret is stored in
   Terraform state after create and preserved on refresh after API secret
   visibility expires.
+- **New `data.zcp_load_balancer` data source.** Look up a load balancer by slug
+  and use its exposed rule IDs with `zcp_load_balancer_attachment`.
 
 ### Changed
 
+- **Upgraded the zcp-cli SDK from v0.0.30 to v0.0.31.** ACL rule reads and
+  post-create ID resolution retrieve every API page. A failed later page now
+  returns a diagnostic instead of treating a rule as absent.
+- **Selected Go toolchain 1.26.9 and upgraded `golang.org/x/net` to v0.60.0.**
+  These updates include security fixes.
+- **Object-storage key refresh preserves disclosed credentials and removes
+  revoked keys.** A key's plaintext secret remains in Terraform state after its
+  disclosure window closes. The provider captures a new credential pair only
+  while the API reports it as active and visible. Existing object-storage
+  credentials remain in state when a response does not disclose them.
+- **Load-balancer resources use the detail endpoint to refresh state and resolve
+  rule IDs.** During destroy, the provider treats an already absent load
+  balancer as deleted.
 - **Upgraded the zcp-cli SDK from v0.0.29 to v0.0.30.** Object storage reads now
   support the current API storage-size shape and bucket configuration resources
-  use explicit S3 credentials from `ZCP_S3_ACCESS_KEY` and
-  `ZCP_S3_SECRET_KEY`.
+  use explicit S3 credentials from `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY`.
 
 ## [v0.2.0] - 2026-09-07
 

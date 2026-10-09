@@ -31,7 +31,7 @@ Before opening a pull request:
 
 ### Prerequisites
 
-- Go 1.26 (the repository pins toolchain 1.26.8 in go.mod)
+- Go 1.26.0 or later (the repository selects toolchain 1.26.9 in `go.mod`)
 - Terraform 1.0+ or OpenTofu 1.6+
 
 ### Local Dev Override
@@ -53,11 +53,10 @@ any example directory will pick it up.
 
 ### zcp-cli Dependency
 
-This provider depends on `github.com/zsoftly/zcp-cli` for shared API client
-types. During local development, `go.mod` contains a `replace` directive
-pointing to `../zcp-cli`. Before cutting a release, update `go.mod` to pin a
-tagged release of `zcp-cli` and remove the `replace` directive.
+This provider imports the tagged `github.com/zsoftly/zcp-cli` module and its
+public `pkg/api` packages. Released builds validate the dependency outside a
+workspace with `GOWORK=off`.
 
-> **Note:** `zcp-cli` currently exposes its API clients under `internal/`, which
-> restricts cross-module imports. A future ticket will move the relevant
-> packages to `pkg/api/` to make them importable here.
+For local SDK development, add a sibling `zcp-cli` checkout to an ignored
+`go.work` file. Do not use that workspace when validating a released provider
+dependency.

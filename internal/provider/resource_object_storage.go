@@ -142,12 +142,12 @@ func (r *objectStorageResource) Schema(ctx context.Context, _ resource.SchemaReq
 			"api_key": schema.StringAttribute{
 				Computed:            true,
 				Sensitive:           true,
-				MarkdownDescription: "S3 access key for the store.",
+				MarkdownDescription: "Legacy S3 access key retained from existing state. New stores use `zcp_object_storage_key` for credentials.",
 			},
 			"api_secret": schema.StringAttribute{
 				Computed:            true,
 				Sensitive:           true,
-				MarkdownDescription: "S3 secret key for the store.",
+				MarkdownDescription: "Legacy S3 secret key retained from existing state. New stores use `zcp_object_storage_key` for credentials.",
 			},
 		},
 		Blocks: map[string]schema.Block{
@@ -285,9 +285,7 @@ func (r *objectStorageResource) Create(ctx context.Context, req resource.CreateR
 			fmt.Sprintf("the API accepted the create for %q but returned no store; check the object storage list before retrying.", model.Name.ValueString()))
 		return
 	}
-
-	// The create response can omit credentials; refresh from Get when needed.
-	if store.APIKey == "" || store.APISecret == "" {
+	if _, ok := objectStorageAllocatedSizeGB(store); !ok {
 		if full, gerr := r.svc.Get(ctx, store.Slug); gerr == nil {
 			full.Status = firstNonEmpty(full.Status, store.Status)
 			store = full
@@ -482,7 +480,8 @@ func (r *objectStorageResource) Delete(ctx context.Context, req resource.DeleteR
 //
 //	<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>[/<plan>/<project>]
 //
-// name, status, size, and credentials come from the subsequent Read.
+// Name, status, and size come from the subsequent Read. Existing legacy
+// credentials remain in state.
 func (r *objectStorageResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "cloud_provider", "region", "billing_cycle", "storage_category", "plan", "project"}
 	importPositional(ctx, req, resp, fields, 5,

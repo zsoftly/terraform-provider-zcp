@@ -11,9 +11,9 @@ Manages a ZCP object storage store (S3-compatible). Create buckets with
 change forces replacement.
 
 Use `zcp_object_storage_key` to create and revoke S3 access keys for the store.
-The legacy sensitive attributes `api_key` and `api_secret` remain in state when
-the API returns them, but new key management should use
-`zcp_object_storage_key`.
+This resource no longer populates the legacy sensitive attributes `api_key` and
+`api_secret` from API responses. It preserves values already in Terraform state.
+New stores use `zcp_object_storage_key` for credentials.
 
 ## Example Usage
 
@@ -72,5 +72,7 @@ terraform import zcp_object_storage.assets assets-x1/zsoftly/yow-1/hourly/nvme
 - `id` (String) Object storage slug.
 - `status` (String) Current status.
 - `size` (Number) Provisioned size in GB as reported by the API.
-- `api_key` (String, Sensitive) S3 access key.
-- `api_secret` (String, Sensitive) S3 secret key.
+- `api_key` (String, Sensitive) Legacy S3 access key retained from existing
+  state. New stores use `zcp_object_storage_key` for credentials.
+- `api_secret` (String, Sensitive) Legacy S3 secret key retained from existing
+  state. New stores use `zcp_object_storage_key` for credentials.

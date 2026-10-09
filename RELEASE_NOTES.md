@@ -2,18 +2,32 @@
 
 ## Unreleased
 
-This release updates the provider to the zcp-cli SDK v0.0.30.
+This release updates the provider to the zcp-cli SDK v0.0.31.
+
+- ACL rule refreshes and post-create ID lookup retrieve every API page. Rules
+  beyond the API's default page size remain in Terraform state, and a failed
+  later page reports an error instead of removing a rule from state.
+- The selected Go toolchain is now 1.26.9, and `golang.org/x/net` is now
+  v0.60.0. These updates include security fixes.
 
 - `zcp_instance` supports custom VM plans with `cpu`, `memory_gb`, and
   `disk_gb`. Fixed catalogue plans continue to use `plan`; custom inputs and
   `plan` are mutually exclusive.
 - New `zcp_object_storage_key` creates and revokes object storage S3 access
   keys. Terraform stores the plaintext secret in state after create and
-  preserves it on refresh after the API no longer returns it.
+  preserves it on refresh after the API stops disclosing it.
+- Object-storage key refresh keeps a disclosed secret in state after its
+  visibility window closes, removes a revoked key from state, and preserves
+  legacy object-storage credentials when a response does not disclose them.
+- New `data.zcp_load_balancer` looks up a load balancer by slug and exposes its
+  rule IDs for `zcp_load_balancer_attachment`.
+- Load-balancer resources use the detail endpoint to refresh state and resolve
+  rule IDs. During destroy, the provider treats an already absent load balancer
+  as deleted.
 - Object storage reads support the current API storage-size response shape.
-- Bucket configuration resources continue to manage S3 gateway settings, but
-  the provider process must now have `ZCP_S3_ACCESS_KEY` and
-  `ZCP_S3_SECRET_KEY` set to an active key for the store.
+- Bucket configuration resources continue to manage S3 gateway settings, but the
+  provider process must now have `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` set
+  to an active key for the store.
 
 ---
 

@@ -167,18 +167,13 @@ func (r *loadBalancerAttachmentResource) Read(ctx context.Context, req resource.
 	// The API does not expose rule membership, so the attachment itself cannot
 	// be verified. Drop the resource when its parent rule or LB is gone; keep
 	// state as-is otherwise.
-	project := r.defaultProject
-	if !model.Project.IsNull() && !model.Project.IsUnknown() {
-		project = model.Project.ValueString()
-	}
-	lbs, err := r.svc.List(ctx, model.Region.ValueString(), project)
-	if err != nil {
-		resp.Diagnostics.AddError("Failed to read load balancer attachment", err.Error())
+	lb, err := r.svc.Get(ctx, model.LoadBalancer.ValueString())
+	if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+		resp.State.RemoveResource(ctx)
 		return
 	}
-	lb := findLBBySlug(lbs, model.LoadBalancer.ValueString())
-	if lb == nil {
-		resp.State.RemoveResource(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to read load balancer attachment", err.Error())
 		return
 	}
 	ruleID := model.Rule.ValueString()
