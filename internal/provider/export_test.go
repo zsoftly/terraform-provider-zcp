@@ -142,6 +142,17 @@ func NewFirewallRuleResourceWithServicesAndProject(svc firewallServiceIface, ipS
 func init() {
 	privateIPPollInterval = 20 * time.Millisecond
 	privateIPPollWindow = 100 * time.Millisecond
+	instanceRenamePollInterval = 20 * time.Millisecond
+}
+
+// SetInstanceRenamePollIntervalForTest overrides the asynchronous hostname
+// change polling interval and returns a restore function.
+func SetInstanceRenamePollIntervalForTest(d time.Duration) func() {
+	prev := instanceRenamePollInterval
+	instanceRenamePollInterval = d
+	return func() {
+		instanceRenamePollInterval = prev
+	}
 }
 
 // NewInstanceResourceWithService creates an instanceResource pre-wired with the

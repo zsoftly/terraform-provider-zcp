@@ -881,6 +881,21 @@ func TestLoadBalancerAttachmentResource_deleteAbsentAttachmentIsNoOp(t *testing.
 	}
 }
 
+func TestLoadBalancerAttachmentResource_deleteAbsentAttachmentServerErrorIsNoOp(t *testing.T) {
+	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
+		StatusCode: 500,
+		Message:    "The provided virtual machine is invalid or not assigned to the load balancer rule.",
+	}}
+	r := internalprovider.NewLoadBalancerAttachmentResourceWithService(svc)
+	schResp := lbAttachmentSchema(t)
+	stateVal := lbAttachmentRaw(t, schResp, "web-lb-a1b2/rule-1/vm1-abc", "web-lb-a1b2", "rule-1", "vm1-abc")
+	deleteResp := &resource.DeleteResponse{}
+	r.Delete(context.Background(), resource.DeleteRequest{State: tfsdk.State{Schema: schResp.Schema, Raw: stateVal}}, deleteResp)
+	if deleteResp.Diagnostics.HasError() {
+		t.Fatalf("missing attachment should not block destroy when the API returns 500: %v", deleteResp.Diagnostics)
+	}
+}
+
 func TestLoadBalancerAttachmentResource_deleteResourceNotFoundIsNoOp(t *testing.T) {
 	svc := &fakeLoadBalancerService{err: &apierrors.APIError{
 		StatusCode: 403,

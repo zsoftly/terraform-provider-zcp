@@ -9,7 +9,7 @@ to [Semantic Versioning](https://semver.org/).
 
 ### Changed
 
-- The provider now builds against zcp-cli v1.0.0. Kubernetes clusters use fixed
+- The provider now builds against zcp-cli v1.0.1. Kubernetes clusters use fixed
   control-plane, worker, and root-volume plans with an explicit root disk size.
   These shape fields force replacement because the API exposes no role-specific
   plan update operation. The provider still reads and destroys state from the
@@ -42,14 +42,24 @@ to [Semantic Versioning](https://semver.org/).
 - `zcp_vm_backup_schedule` manages VM backup scheduler policies, including
   timing, timezone, retention, paused state, import, and scope checks.
 
+### Fixed
+
+- Load-balancer attachment destroy now also treats the exact already-detached
+  response as successful when the API incorrectly reports it with HTTP 500.
+  Other server errors still return a diagnostic.
+- Instance name updates now use the hostname-change operation. The provider
+  waits for the asynchronous change before later updates; changing the name can
+  restart a running instance or start a stopped instance.
+- `zcp_volume` accepts a storage `plan` with `size` to select capacity.
+
 ### Known limitations
 
-- Staging testing did not demonstrate successful automatic scale-out. Scale and
-  autoscale calls recreated root-volume subscriptions.
-- Staging cluster cancellation left an empty network and an active subscription
-  associated with it. Separate network deletion was required to finish cleanup.
+- Automatic Kubernetes scale-out is unverified. Terraform records accepted
+  autoscaling bounds and does not promise an immediate worker increase or stable
+  root-volume subscriptions.
+- Cluster cancellation can leave a network that requires separate deletion.
 - `zcp_vm_backup_schedule` rejects `everyOtherDay` before writing because the
-  platform persists that interval and then reports an error.
+  platform can persist that interval and then report an error.
 
 ## [v0.3.0] - 2026-10-09
 
@@ -245,7 +255,7 @@ to [Semantic Versioning](https://semver.org/).
   (0-65535). Put the mail server in `content` and the preference number in
   `priority`. Priority is required for `MX` and rejected for every other type,
   both checked at plan time. The previous SDK never sent priority, so `MX`
-  records failed with an API error. Verified against the live platform.
+  records failed with an API error.
 
 ### Changed
 
@@ -269,8 +279,7 @@ to [Semantic Versioning](https://semver.org/).
   frees the IP as part of the deletion, so destroy no longer leaves a billable
   address. A public IP bound through `zcp_ip_address`/`zcp_ip_association` is
   left to its own resource. Set `assign_public_ip = false` to create the
-  instance without an auto-assigned public IP. Verified end to end with
-  Terraform and OpenTofu.
+  instance without an auto-assigned public IP.
 - `zcp_load_balancer` destroy now deletes the load balancer through the
   service-cancellation workflow the CMP Web UI runs, instead of the direct
   delete endpoint, which could return success without removing the balancer.
@@ -286,8 +295,7 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [v0.1.0] - 2026-07-07
 
-Initial release. Built on the zcp-cli SDK v0.0.23 and verified against the live
-ZCP platform.
+Initial release. Built on the zcp-cli SDK v0.0.23.
 
 ### Added
 

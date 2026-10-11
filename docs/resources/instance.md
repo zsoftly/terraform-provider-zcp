@@ -15,7 +15,7 @@ resource finishes applying.
 The resource maps the CLI's instance operations to Terraform's declarative
 model:
 
-- **In-place updates:** `name` (display name), `plan` + `billing_cycle`
+- **In-place updates:** `name` (name and hostname), `plan` + `billing_cycle`
   (resize), `user_data` (change-startup-script), and `tags` (tag-create /
   tag-delete).
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template
@@ -65,14 +65,15 @@ auto-assigned public IP.
 **Power state is not managed by Terraform.** The provider reports the instance's
 runtime state (running/stopped) read-only in `state`. Running `apply` against a
 stopped or running instance produces no diff and never starts or stops it. The
-provider only stops and restarts the VM **internally during a resize**. Changing
+provider only issues power operations **internally during a resize**. Changing
 `plan` (and/or `billing_cycle`) stops the instance, changes its compute
 offering, and restarts it to its previous state, like changing an `aws_instance`
-`instance_type`. `tags` are optional.
+`instance_type`. Changing `name` changes the hostname. It can restart a running
+instance or start a stopped instance. `tags` are optional.
 
-~> **Hostname is set once at creation** (from `name`) and is not changed
-afterward. Only the display `name` is mutable. This matches how instance
-hostnames behave on EC2 and most clouds.
+~> **Changing `name` also changes the hostname. It can restart a running
+instance or start a stopped instance.** The provider waits for the change to
+complete before applying later updates.
 
 Imperative, non-declarative CLI operations (`reboot`/`reset`, `change-password`,
 `ssh`, `logs`, and `addons`) are not modeled as resource attributes. Use the
@@ -185,8 +186,9 @@ destroying earlier state. New instances use named plans.
 
 ### Required
 
-- `name` (String) Display name of the instance. Updated in place. The hostname
-  is set from this value at creation and is not changed afterward.
+- `name` (String) Instance name. Updated in place. Changing it also changes the
+  hostname. It can restart a running instance or start a stopped instance. The
+  provider waits for the change to complete before applying later updates.
 - `cloud_provider` (String) Cloud provider slug. Use
   `data.zcp_region.<name>.cloud_provider`. Changing this forces replacement.
 - `region` (String) Region slug (e.g. `yow-1`). Changing this forces

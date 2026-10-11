@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -32,6 +33,7 @@ type fakeInstanceService struct {
 	getErr          error
 	gotQueue        []*instance.VirtualMachine
 	metaState       string
+	metaStates      []string
 	metaErr         error
 	deleted         []string
 	expunged        []bool
@@ -46,6 +48,8 @@ type fakeInstanceService struct {
 
 	// update-path capture
 	renamedTo     string
+	renameRequest *instance.ChangeLabelRequest
+	renameErr     error
 	changedPlan   *instance.ChangePlanRequest
 	changePlanErr error
 	changedUD     *string
@@ -89,6 +93,10 @@ func (f *fakeInstanceService) Meta(_ context.Context, _ string) (*instance.VMMet
 		return nil, f.metaErr
 	}
 	meta := &instance.VMMeta{State: f.metaState}
+	if len(f.metaStates) > 0 {
+		meta.State = f.metaStates[0]
+		f.metaStates = f.metaStates[1:]
+	}
 	if f.got != nil {
 		meta.ID = f.got.ID
 		meta.Name = f.got.Name
@@ -104,12 +112,17 @@ func (f *fakeInstanceService) Meta(_ context.Context, _ string) (*instance.VMMet
 func (f *fakeInstanceService) ActivityLogs(_ context.Context, _ string) ([]instance.ActivityLog, error) {
 	return f.logs, nil
 }
-func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name string) error {
-	f.renamedTo = name
-	if f.got != nil {
-		f.got.Name = name
+func (f *fakeInstanceService) ChangeHostname(_ context.Context, _ string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error) {
+	f.renameRequest = &req
+	f.renamedTo = req.Hostname
+	if f.renameErr != nil {
+		return nil, f.renameErr
 	}
-	return nil
+	if f.got != nil && len(f.gotQueue) == 0 {
+		f.got.Name = req.Hostname
+		f.got.Hostname = req.Hostname
+	}
+	return &instance.ActionResponse{}, nil
 }
 func (f *fakeInstanceService) ChangePlan(_ context.Context, _ string, req instance.ChangePlanRequest) (*instance.ActionResponse, error) {
 	f.changedPlan = &req
@@ -1181,6 +1194,10 @@ func instanceVariant(t *testing.T, name, plan, billing, userData string, tags ma
 }
 
 func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap map[string]tftypes.Value) resource.UpdateResponse {
+	return updateInstanceWithContext(t, context.Background(), svc, planMap, stateMap)
+}
+
+func updateInstanceWithContext(t *testing.T, ctx context.Context, svc *fakeInstanceService, planMap, stateMap map[string]tftypes.Value) resource.UpdateResponse {
 	t.Helper()
 	r := internalprovider.NewInstanceResourceWithService(svc)
 	schResp := instanceSchema(t)
@@ -1190,8 +1207,74 @@ func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap ma
 		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateMap)},
 	}
 	updateResp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateMap)}}
-	r.Update(context.Background(), updateReq, updateResp)
+	r.Update(ctx, updateReq, updateResp)
 	return *updateResp
+}
+
+func TestInstanceResource_updateWaitsForHostnameChange(t *testing.T) {
+	restore := internalprovider.SetInstanceRenamePollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	before := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	after := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm2", Hostname: "vm2", State: "Stopped"}
+	svc := &fakeInstanceService{
+		got:        after,
+		gotQueue:   []*instance.VirtualMachine{before, after, after},
+		metaStates: []string{"Starting", "Stopped"},
+	}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo after rename", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.renameRequest == nil || svc.renameRequest.Name != "vm1" || svc.renameRequest.Hostname != "vm2" {
+		t.Fatalf("ChangeHostname request = %#v, want current name vm1 and hostname vm2", svc.renameRequest)
+	}
+	if svc.changedUD == nil || *svc.changedUD != "echo after rename" {
+		t.Fatalf("startup script change did not run after hostname change: %v", svc.changedUD)
+	}
+	if svc.getCalls < 4 {
+		t.Errorf("Get calls = %d, want at least 4 to wait for the asynchronous rename and stable state before refresh", svc.getCalls)
+	}
+}
+
+func TestInstanceResource_updateStopsAfterHostnameChangeError(t *testing.T) {
+	svc := &fakeInstanceService{
+		got:       &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"},
+		renameErr: errors.New("rename request failed"),
+	}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo must not run", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected hostname change error")
+	}
+	if svc.changedUD != nil {
+		t.Fatalf("startup script changed after hostname error: %q", *svc.changedUD)
+	}
+}
+
+func TestInstanceResource_updateStopsAfterHostnameChangeTimeout(t *testing.T) {
+	restore := internalprovider.SetInstanceRenamePollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	before := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	svc := &fakeInstanceService{got: before, gotQueue: []*instance.VirtualMachine{before}}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo must not run", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	defer cancel()
+
+	resp := updateInstanceWithContext(t, ctx, svc, plan, state)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected hostname change timeout")
+	}
+	if svc.changedUD != nil {
+		t.Fatalf("startup script changed after hostname timeout: %q", *svc.changedUD)
+	}
 }
 
 // TestInstanceResource_updateResizeIsTransparent verifies that changing the plan
@@ -1266,6 +1349,31 @@ func TestInstanceResource_resizeWithStaleCachedState(t *testing.T) {
 	}
 	if svc.stopCalled != 1 || svc.startCalled != 1 {
 		t.Errorf("stop=%d start=%d, want 1/1 (transparent resize stop+restart)", svc.stopCalled, svc.startCalled)
+	}
+	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
+		t.Errorf("ChangePlan not called with new plan: %+v", svc.changedPlan)
+	}
+	var final instanceStateModel
+	if diags := resp.State.Get(context.Background(), &final); diags.HasError() {
+		t.Fatalf("reading final state: %v", diags)
+	}
+	if final.State.ValueString() != "Running" {
+		t.Errorf("final state = %q, want live Running state", final.State.ValueString())
+	}
+}
+
+func TestInstanceResource_updateRenameThenResizeUsesLiveState(t *testing.T) {
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	svc := &fakeInstanceService{got: vm, metaState: "Running", staleCache: true}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.large", "hourly", "", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.stopCalled != 1 || svc.startCalled != 1 {
+		t.Errorf("stop=%d start=%d, want 1/1 using the live Running state", svc.stopCalled, svc.startCalled)
 	}
 	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
 		t.Errorf("ChangePlan not called with new plan: %+v", svc.changedPlan)

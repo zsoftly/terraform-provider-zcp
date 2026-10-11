@@ -27,9 +27,8 @@ Destroy submits the platform's immediate Kubernetes service-cancellation request
 and waits for the cluster to disappear. The provider does not store kubeconfig
 or other cluster credentials.
 
-Staging validation found that cluster cancellation left an empty network and its
-active subscription. Separate network deletion was required to finish cleanup.
-Check the remaining network and subscription after cluster destruction.
+Cluster cancellation can leave a network and active subscription. Check the
+remaining network and subscription after cluster destruction.
 
 ~> **Note on write-only fields:** the create-only inputs above are sent to the
 API on creation but are preserved from state on refresh to avoid format-driven

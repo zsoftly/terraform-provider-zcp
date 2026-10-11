@@ -37,7 +37,7 @@ type instanceServiceIface interface {
 	Get(ctx context.Context, slug string) (*instance.VirtualMachine, error)
 	Meta(ctx context.Context, slug string) (*instance.VMMeta, error)
 	ActivityLogs(ctx context.Context, slug string) ([]instance.ActivityLog, error)
-	ChangeLabel(ctx context.Context, slug, name string) error
+	ChangeHostname(ctx context.Context, slug string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error)
 	ChangePlan(ctx context.Context, slug string, req instance.ChangePlanRequest) (*instance.ActionResponse, error)
 	ChangeStartupScript(ctx context.Context, slug string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error)
 	CreateTag(ctx context.Context, slug string, req instance.TagRequest) (*instance.ActionResponse, error)
@@ -48,31 +48,18 @@ type instanceServiceIface interface {
 	Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error
 }
 
-// instanceService adapts the zcp-cli instance.Service, overriding the rename
-// operation. The released CLI's ChangeHostname posts {name, hostname} to
-// /change-label, but the API requires the field `vm_label` (its validation
-// rejects the CLI payload with "The vm label field is required" — a known,
-// unfixed CLI bug). We post the correct body directly via the shared HTTP client
-// so display-name changes apply in place.
+// instanceService adapts the zcp-cli instance.Service for provider-specific
+// cancellation behavior.
 type instanceService struct {
 	*instance.Service
 	client *httpclient.Client
 }
 
-func (s *instanceService) ChangeLabel(ctx context.Context, slug, name string) error {
-	body := map[string]string{"vm_label": name}
-	var resp instance.ActionResponse
-	if err := s.client.Post(ctx, "/virtual-machines/"+slug+"/change-label", body, &resp); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Cancel deletes a VM through the unified service-cancellation workflow
 // (POST /billing/service-cancel-requests/{slug}) the CMP Web UI uses. Unlike the
-// direct DELETE endpoint (Service.Delete), this releases the VM's auto-assigned
-// public IP when deletePublicIP is set, so destroy does not strand a billed
-// address. Deletion is asynchronous; callers poll until the VM is gone.
+// SDK deletion operation, this releases the VM's auto-assigned public IP when
+// deletePublicIP is set, so destroy does not strand a billed address. Deletion
+// is asynchronous; callers poll until the VM is gone.
 func (s *instanceService) Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error {
 	dip := deletePublicIP
 	req := billing.CancelServiceRequest{
@@ -161,7 +148,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place. The instance runtime state is reported read-only in `state`.",
+		MarkdownDescription: "Manages a virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place. Changing `name` also changes the hostname. The change can restart a running instance or start a stopped instance. The provider waits for it to complete. The instance runtime state is reported read-only in `state`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -170,7 +157,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Display name of the instance. Updated in place. (The instance's hostname is set from this value at creation and, like all clouds, is not changed afterward.)",
+				MarkdownDescription: "Instance name. Updated in place. Changing it also changes the hostname. The change can restart a running instance or start a stopped instance. The provider waits for it to complete.",
 			},
 			"cloud_provider": schema.StringAttribute{
 				Required:            true,
@@ -835,11 +822,18 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	slug := state.ID.ValueString()
 
-	// 1. Display name (change-label). hostname is set once at create and never
-	//    changed — only the display name is mutable.
+	// 1. Name and hostname. The API applies this asynchronously, so wait for the
+	//    returned fields and a stable live state before later mutations.
 	if !plan.Name.Equal(state.Name) {
-		if err := r.svc.ChangeLabel(ctx, slug, plan.Name.ValueString()); err != nil {
-			resp.Diagnostics.AddError("Failed to rename instance", err.Error())
+		if _, err := r.svc.ChangeHostname(ctx, slug, instance.ChangeLabelRequest{
+			Name:     state.Name.ValueString(),
+			Hostname: plan.Name.ValueString(),
+		}); err != nil {
+			resp.Diagnostics.AddError("Failed to change instance hostname", err.Error())
+			return
+		}
+		if err := r.waitForHostname(ctx, slug, plan.Name.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Failed to wait for instance hostname change", err.Error())
 			return
 		}
 	}
@@ -874,15 +868,79 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// Re-read for consistent computed values (state, IPs).
+	// Re-read for consistent computed values (state, IPs). Get can lag the live
+	// state after asynchronous operations, so keep state from the authoritative
+	// /meta endpoint.
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to refresh instance after update", err.Error())
 		return
 	}
+	liveState, err := r.waitForStableInstanceState(ctx, slug)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to refresh live instance state after update", err.Error())
+		return
+	}
+	vm.State = liveState
 	r.applyVMState(&plan, vm)
 	r.fillPublicIP(ctx, &plan, vm)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+var instanceRenamePollInterval = 10 * time.Second
+
+// waitForStableInstanceState returns the authoritative runtime state once it
+// reaches a stable value. GET can lag a completed hostname change, so updates
+// that depend on power state use /meta instead.
+func (r *instanceResource) waitForStableInstanceState(ctx context.Context, slug string) (string, error) {
+	var stable string
+	err := pollUntilReady(ctx, instanceRenamePollInterval, func(ctx context.Context) (bool, error) {
+		meta, err := r.svc.Meta(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(meta.State) {
+		case "running", "stopped":
+			stable = meta.State
+			return true, nil
+		case "error", "failed", "destroyed", "expunging", "expunged":
+			return false, fmt.Errorf("instance entered state %q", meta.State)
+		default:
+			return false, nil
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	return stable, nil
+}
+
+// waitForHostname waits for the asynchronous name and hostname change to be
+// visible in the instance record and for the live runtime state to stabilize.
+func (r *instanceResource) waitForHostname(ctx context.Context, slug, hostname string) error {
+	return pollUntilReady(ctx, instanceRenamePollInterval, func(ctx context.Context) (bool, error) {
+		vm, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		if vm.Name != hostname || vm.Hostname != hostname {
+			return false, nil
+		}
+		meta, err := r.svc.Meta(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(meta.State) {
+		case "error", "failed", "destroyed", "expunging", "expunged":
+			return false, fmt.Errorf("instance entered state %q", meta.State)
+		}
+		switch strings.ToLower(meta.State) {
+		case "running", "stopped":
+			return true, nil
+		default:
+			return false, nil
+		}
+	})
 }
 
 // waitForRunning polls the instance until it reports Running (returning it) or a
@@ -1010,11 +1068,11 @@ func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetSt
 // power state after the change or after a failed change, so a failed resize does
 // not leave a previously running VM stopped.
 func (r *instanceResource) resize(ctx context.Context, slug string, plan instanceResourceModel) error {
-	vm, err := r.svc.Get(ctx, slug)
+	liveState, err := r.waitForStableInstanceState(ctx, slug)
 	if err != nil {
 		return err
 	}
-	wasRunning := isRunning(vm.State)
+	wasRunning := isRunning(liveState)
 
 	if wasRunning {
 		base := r.latestActionTime(ctx, slug)

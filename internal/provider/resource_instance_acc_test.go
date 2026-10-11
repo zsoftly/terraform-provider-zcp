@@ -116,9 +116,9 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 	create.name = "tf-acc-instance"
 	create.tags = map[string]string{"Environment": "test"}
 
-	// In-place update WITHOUT managing power: rename (display name), resize, set
-	// startup script, change tags. The provider transparently stops/restarts for
-	// the resize and posts the correct vm_label payload for the rename.
+	// In-place update changes the name and hostname, resizes, sets a startup
+	// script, and changes tags. The provider waits for the asynchronous hostname
+	// change before applying the later updates.
 	updated := base
 	updated.name = "tf-acc-instance-renamed"
 	updated.plan = resizePlan

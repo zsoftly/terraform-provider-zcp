@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -75,7 +76,7 @@ func (r *volumeResource) Metadata(_ context.Context, req resource.MetadataReques
 func (r *volumeResource) Schema(ctx context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP block storage volume. Provide exactly one of `plan` or `size`.",
+		MarkdownDescription: "Manages a ZCP block storage volume. Provide a storage plan, a size, or both.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -109,13 +110,13 @@ func (r *volumeResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 			},
 			"plan": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Plan slug (e.g. `b1g1`). Mutually exclusive with `size`. Changing this forces replacement.",
+				MarkdownDescription: "Storage plan slug (e.g. `b1g1`). Set `size` with a plan to select capacity. Changing this forces replacement.",
 				PlanModifiers:       requiresReplace,
 			},
 			"size": schema.Int64Attribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "Storage size in GB. Set this for a custom-size volume (mutually exclusive with `plan`); for a plan-based volume it is computed from the plan. Changing it forces replacement.",
+				MarkdownDescription: "Storage capacity in GB. Set this with a plan to select capacity, or without a plan for a custom-size volume. For a plan without `size`, this is computed from the API response. Changing it forces replacement.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace(), int64planmodifier.UseStateForUnknown()},
 			},
 			"project": schema.StringAttribute{
@@ -143,8 +144,8 @@ func (r *volumeResource) Schema(ctx context.Context, _ resource.SchemaRequest, r
 	}
 }
 
-// ValidateConfig enforces the "exactly one of plan or size" rule at plan time
-// (the API has no single endpoint that accepts both, and neither is meaningful).
+// ValidateConfig requires a plan, a size, or both at plan time. A supplied size
+// must be positive.
 func (r *volumeResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {
 	var model volumeResourceModel
 	resp.Diagnostics.Append(req.Config.Get(ctx, &model)...)
@@ -156,18 +157,18 @@ func (r *volumeResource) ValidateConfig(ctx context.Context, req resource.Valida
 	if model.Plan.IsUnknown() || model.Size.IsUnknown() {
 		return
 	}
-	planSet := !model.Plan.IsNull()
+	planSet := !model.Plan.IsNull() && strings.TrimSpace(model.Plan.ValueString()) != ""
 	sizeSet := !model.Size.IsNull()
-	switch {
-	case planSet && sizeSet:
-		resp.Diagnostics.AddError(
-			"Conflicting volume sizing",
-			"`plan` and `size` are mutually exclusive — set exactly one.",
-		)
-	case !planSet && !sizeSet:
+	if !planSet && !sizeSet {
 		resp.Diagnostics.AddError(
 			"Missing volume sizing",
-			"One of `plan` or `size` must be set.",
+			"Set `plan`, `size`, or both.",
+		)
+	}
+	if sizeSet && model.Size.ValueInt64() < 1 {
+		resp.Diagnostics.AddError(
+			"Invalid volume size",
+			"`size` must be greater than zero.",
 		)
 	}
 }
@@ -188,6 +189,11 @@ func (r *volumeResource) Configure(_ context.Context, req resource.ConfigureRequ
 func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var model volumeResourceModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &model)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	var config volumeResourceModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
@@ -219,7 +225,10 @@ func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest,
 		Plan:            model.Plan.ValueString(),
 		VirtualMachine:  model.VM.ValueString(),
 	}
-	if !model.Size.IsNull() && !model.Size.IsUnknown() {
+	// size is Optional+Computed. The plan can therefore carry a prior state
+	// value when a replacement omits size. Only an explicitly configured size
+	// belongs in the create request.
+	if !config.Size.IsNull() && !model.Size.IsNull() && !model.Size.IsUnknown() {
 		createReq.IsCustomPlan = true
 		createReq.CustomPlan = &volume.CustomPlanStorage{Storage: int(model.Size.ValueInt64())}
 	}
