@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"regexp"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -57,10 +56,6 @@ func testAccCheckVolumeDestroyed(t *testing.T, region string) resource.TestCheck
 
 // TestAccVolumeResource_lifecycle covers custom-size create, re-plan zero-diff,
 // import (size populated from the API), and destroy.
-//
-// Plan-based create is intentionally not exercised here: the upstream API
-// currently 500s on it ("Undefined property: stdClass::$storage"), reproducible
-// straight from the CLI. Size-based is the working path.
 func TestAccVolumeResource_lifecycle(t *testing.T) {
 	region := accEnvDefault("ZCP_ACC_VOLUME_REGION", accRegion())
 	storageCategory := accEnv(t, "ZCP_ACC_STORAGE_CATEGORY")
@@ -102,34 +97,44 @@ func TestAccVolumeResource_lifecycle(t *testing.T) {
 	})
 }
 
-// TestAccVolumeResource_planSizeConflict asserts the plan-time validation when
-// both plan and size are set. It needs no live resources, only a token.
-func TestAccVolumeResource_planSizeConflict(t *testing.T) {
+// TestAccVolumeResource_planAndSize covers a named storage tier with explicit
+// capacity.
+func TestAccVolumeResource_planAndSize(t *testing.T) {
 	region := accRegion()
 	storageCategory := accEnvDefault("ZCP_ACC_STORAGE_CATEGORY", "nvme")
+	plan := accEnv(t, "ZCP_ACC_VOLUME_PLAN")
+	project := os.Getenv("ZCP_ACC_PROJECT")
+	optional := ""
+	if project != "" {
+		optional = fmt.Sprintf("\n  project          = %q", project)
+	}
 	config := fmt.Sprintf(`
 data "zcp_region" "r" {
   slug = %q
 }
 
-resource "zcp_volume" "bad" {
-  name             = "tf-acc-volume-bad"
+resource "zcp_volume" "test" {
+  name             = "tf-acc-volume-plan-size"
   cloud_provider   = data.zcp_region.r.cloud_provider
   region           = %q
   billing_cycle    = "hourly"
   storage_category = %q
-  plan             = "b1g1"
-  size             = 50
+  plan             = %q
+  size             = 10%s
 }
-`, region, region, storageCategory)
+`, region, region, storageCategory, plan, optional)
 
 	resource.Test(t, resource.TestCase{
 		PreCheck:                 func() { testAccPreCheck(t) },
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             testAccCheckVolumeDestroyed(t, region),
 		Steps: []resource.TestStep{
 			{
-				Config:      config,
-				ExpectError: regexp.MustCompile(`mutually exclusive`),
+				Config: config,
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("zcp_volume.test", "plan", plan),
+					resource.TestCheckResourceAttr("zcp_volume.test", "size", "10"),
+				),
 			},
 		},
 	})

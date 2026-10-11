@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -15,9 +16,10 @@ import (
 )
 
 type instanceAccConfig struct {
-	region, template, networkPlan, storageCategory, sshKey, project string
-	name, plan, userData                                            string
-	tags                                                            map[string]string
+	region, template, networkPlan, storageCategory, storagePlan, sshKey, project string
+	name, plan, userData                                                         string
+	rootDiskSize                                                                 int
+	tags                                                                         map[string]string
 }
 
 func testAccInstanceConfig(c instanceAccConfig) string {
@@ -36,7 +38,9 @@ resource "zcp_instance" "test" {
   billing_cycle    = "hourly"
   network_plan     = %q
   storage_category = %q
-`, c.region, c.name, c.region, c.template, c.plan, c.networkPlan, c.storageCategory)
+  blockstorage_plan = %q
+  root_disk_size     = %d
+`, c.region, c.name, c.region, c.template, c.plan, c.networkPlan, c.storageCategory, c.storagePlan, c.rootDiskSize)
 	if c.sshKey != "" {
 		fmt.Fprintf(&b, "  ssh_key = %q\n", c.sshKey)
 	}
@@ -94,9 +98,17 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 		template:        accEnv(t, "ZCP_ACC_TEMPLATE"),
 		networkPlan:     accEnv(t, "ZCP_ACC_NETWORK_PLAN"),
 		storageCategory: accEnv(t, "ZCP_ACC_STORAGE_CATEGORY"),
-		sshKey:          os.Getenv("ZCP_ACC_SSH_KEY"),
-		project:         os.Getenv("ZCP_ACC_PROJECT"),
-		plan:            accEnv(t, "ZCP_ACC_INSTANCE_PLAN"),
+		storagePlan:     accEnv(t, "ZCP_ACC_INSTANCE_STORAGE_PLAN"),
+		rootDiskSize: func() int {
+			value, err := strconv.Atoi(accEnv(t, "ZCP_ACC_INSTANCE_ROOT_DISK_SIZE"))
+			if err != nil || value < 1 {
+				t.Fatal("ZCP_ACC_INSTANCE_ROOT_DISK_SIZE must be a positive integer")
+			}
+			return value
+		}(),
+		sshKey:  os.Getenv("ZCP_ACC_SSH_KEY"),
+		project: os.Getenv("ZCP_ACC_PROJECT"),
+		plan:    accEnv(t, "ZCP_ACC_INSTANCE_PLAN"),
 	}
 	resizePlan := accEnv(t, "ZCP_ACC_INSTANCE_PLAN2") // a second plan slug to resize to
 
@@ -104,9 +116,9 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 	create.name = "tf-acc-instance"
 	create.tags = map[string]string{"Environment": "test"}
 
-	// In-place update WITHOUT managing power: rename (display name), resize, set
-	// startup script, change tags. The provider transparently stops/restarts for
-	// the resize and posts the correct vm_label payload for the rename.
+	// In-place update changes the name and hostname, resizes, sets a startup
+	// script, and changes tags. The provider waits for the asynchronous hostname
+	// change before applying the later updates.
 	updated := base
 	updated.name = "tf-acc-instance-renamed"
 	updated.plan = resizePlan
@@ -153,7 +165,7 @@ func TestAccInstanceResource_lifecycle(t *testing.T) {
 				ImportStateIdFunc: func(s *terraform.State) (string, error) {
 					rs := s.RootModule().Resources["zcp_instance.test"]
 					cp := s.RootModule().Resources["data.zcp_region.r"].Primary.Attributes["cloud_provider"]
-					return fmt.Sprintf("%s/%s/%s/%s", rs.Primary.ID, cp, base.region, base.template), nil
+					return strings.Join([]string{rs.Primary.ID, cp, base.region, base.template, updated.plan, "hourly", base.project, base.sshKey, "", base.networkPlan, base.storageCategory, "", "", "", base.storagePlan, strconv.Itoa(base.rootDiskSize)}, "/"), nil
 				},
 			},
 		},

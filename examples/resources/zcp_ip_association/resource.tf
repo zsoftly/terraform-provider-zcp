@@ -41,14 +41,16 @@ resource "zcp_ip_address" "eip" {
 }
 
 resource "zcp_instance" "web" {
-  name             = "web-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network          = zcp_network.tier.id
-  storage_category = "nvme"
+  name              = "web-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network           = zcp_network.tier.id
+  storage_category  = "nvme"
 }
 
 # Associate the owned IP with the instance (static NAT).

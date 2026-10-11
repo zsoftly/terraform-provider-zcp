@@ -1,6 +1,42 @@
-# terraform-provider-zcp v0.3.0 Release Notes
+# terraform-provider-zcp Release Notes
 
-v0.3.0 updates the provider to the zcp-cli SDK v0.0.31.
+## v1.0.0
+
+Provider v1.0.0 uses the zcp-cli v1.0.1 SDK and adds separate compute and
+storage configuration, Kubernetes autoscaling settings, and VM backup schedules.
+
+- Added `zcp_vm_backup_schedule` for VM backup scheduler policies. It manages
+  supported intervals, day and time, timezone, retention, pause state, import,
+  and policy scope.
+- DNS domain refresh now uses the SDK's paginated slug lookup. `data.zcp_plan`
+  now exposes the decoded plan tag.
+- New instances require a named compute plan, `blockstorage_plan`, and
+  `root_disk_size`. The provider rejects custom CPU, memory, and disk inputs.
+  Existing custom-plan state remains readable and destroyable.
+- Kubernetes clusters use separate control-plane, worker, and root-volume plans,
+  plus root disk capacity and autoscaling bounds. The legacy `plan` attribute
+  remains for existing state only. Changing an existing cluster to split-plan
+  configuration forces replacement.
+- Review the upgrade plan before applying. Existing resources are preserved in
+  state, but creating or replacing an instance or cluster requires the new
+  named-plan fields.
+- `everyOtherDay` is rejected before a scheduler request because the platform
+  persists the interval and then reports an error. Use `hourly`, `dailyAt`,
+  `weeklyOn`, or `monthlyOn`.
+- One-off VM backup restores and run-now operations remain CLI commands because
+  Terraform does not model them as durable state.
+- Automatic Kubernetes scale-out is unverified. Terraform records accepted
+  autoscaling bounds and does not promise an immediate worker increase or stable
+  root-volume subscriptions.
+- Cluster cancellation can leave a network that requires separate deletion.
+- Instance name updates change the hostname. They can restart a running instance
+  or start a stopped instance. The provider waits for the asynchronous change
+  before later updates.
+- `zcp_volume` accepts a named storage plan and capacity together.
+
+## v0.3.0
+
+Historical release notes for v0.3.0 follow.
 
 - ACL rule refreshes and post-create ID lookup retrieve every API page. Rules
   beyond the API's default page size remain in Terraform state, and a failed
@@ -29,29 +65,3 @@ v0.3.0 updates the provider to the zcp-cli SDK v0.0.31.
 - Bucket configuration resources manage S3 gateway settings when the provider
   process has `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` for an active store
   key.
-
-## Live validation
-
-On 2026-10-09, live Terraform validation covered ACL rule refresh across a rule
-set expanded beyond the default page size, with zero changes on a second plan.
-It also covered a custom 2 CPU, 2 GB memory, 20 GB disk instance; object-storage
-key and bucket configuration create, refresh, and destroy; and load-balancer
-creation, an additional rule, and the load-balancer data source.
-
-The object-storage key test confirmed that the credential pair already in state
-remained unchanged after the API disclosure window expired.
-
-The load-balancer API omitted the configured initial rule on a fresh read. The
-attachment create request succeeded, but a subsequent detach request reported
-that the VM was not assigned to the rule. The validation did not confirm traffic
-delivery or attachment membership. No backend cause has been established.
-
-During cleanup, Terraform attachment cleanup completed after the API reported
-that the VM was already unassigned, and the VM was destroyed. Terraform then
-attempted to delete the remaining additional rule. The API rejected that request
-because a load balancer must retain one active rule. The provider reports this
-error and does not delete the load balancer when only rule destruction was
-requested. The test load balancer and dedicated IP were removed through the CLI.
-Terraform then removed the remaining network. Follow-up API checks found no test
-resources or associated IPs, and all three Terraform states contain no managed
-resources.

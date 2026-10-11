@@ -31,6 +31,7 @@ var _ resource.ResourceWithImportState = &dnsDomainResource{}
 
 // dnsServiceIface is shared by zcp_dns_domain and zcp_dns_record.
 type dnsServiceIface interface {
+	FindBySlug(ctx context.Context, slug string) (*dns.Domain, error)
 	Show(ctx context.Context, slug string) (*dns.Domain, error)
 	Create(ctx context.Context, req dns.CreateDomainRequest) (*dns.Domain, error)
 	Delete(ctx context.Context, slug string) error
@@ -193,7 +194,11 @@ func (r *dnsDomainResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
-	domain, err := r.svc.Show(ctx, model.ID.ValueString())
+	domain, err := r.svc.FindBySlug(ctx, model.ID.ValueString())
+	if domain == nil && err == nil {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	if isBackendNotFound(err) {
 		resp.State.RemoveResource(ctx)
 		return

@@ -142,6 +142,17 @@ func NewFirewallRuleResourceWithServicesAndProject(svc firewallServiceIface, ipS
 func init() {
 	privateIPPollInterval = 20 * time.Millisecond
 	privateIPPollWindow = 100 * time.Millisecond
+	instanceRenamePollInterval = 20 * time.Millisecond
+}
+
+// SetInstanceRenamePollIntervalForTest overrides the asynchronous hostname
+// change polling interval and returns a restore function.
+func SetInstanceRenamePollIntervalForTest(d time.Duration) func() {
+	prev := instanceRenamePollInterval
+	instanceRenamePollInterval = d
+	return func() {
+		instanceRenamePollInterval = prev
+	}
 }
 
 // NewInstanceResourceWithService creates an instanceResource pre-wired with the
@@ -297,6 +308,16 @@ func NewVMSnapshotResourceWithService(svc vmSnapshotServiceIface) resource.Resou
 // finish quickly.
 func NewVMBackupResourceWithService(svc vmBackupServiceIface) resource.Resource {
 	return &vmBackupResource{svc: svc, deletePollInterval: time.Millisecond}
+}
+
+// NewVMBackupScheduleResourceWithService creates a VM backup schedule resource
+// pre-wired with the given service; available only in test binaries.
+func NewVMBackupScheduleResourceWithService(svc vmBackupScheduleService, instances ...vmBackupScheduleInstanceLister) resource.Resource {
+	r := &vmBackupScheduleResource{svc: svc}
+	if len(instances) > 0 {
+		r.instances = instances[0]
+	}
+	return r
 }
 
 // NewVolumeSnapshotResourceWithService creates a volumeSnapshotResource pre-wired

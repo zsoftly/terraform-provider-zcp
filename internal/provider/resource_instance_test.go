@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -32,6 +33,7 @@ type fakeInstanceService struct {
 	getErr          error
 	gotQueue        []*instance.VirtualMachine
 	metaState       string
+	metaStates      []string
 	metaErr         error
 	deleted         []string
 	expunged        []bool
@@ -46,6 +48,8 @@ type fakeInstanceService struct {
 
 	// update-path capture
 	renamedTo     string
+	renameRequest *instance.ChangeLabelRequest
+	renameErr     error
 	changedPlan   *instance.ChangePlanRequest
 	changePlanErr error
 	changedUD     *string
@@ -89,6 +93,10 @@ func (f *fakeInstanceService) Meta(_ context.Context, _ string) (*instance.VMMet
 		return nil, f.metaErr
 	}
 	meta := &instance.VMMeta{State: f.metaState}
+	if len(f.metaStates) > 0 {
+		meta.State = f.metaStates[0]
+		f.metaStates = f.metaStates[1:]
+	}
 	if f.got != nil {
 		meta.ID = f.got.ID
 		meta.Name = f.got.Name
@@ -96,17 +104,25 @@ func (f *fakeInstanceService) Meta(_ context.Context, _ string) (*instance.VMMet
 			meta.State = f.got.State
 		}
 	}
+	if meta.State == "" {
+		meta.State = "Running"
+	}
 	return meta, nil
 }
 func (f *fakeInstanceService) ActivityLogs(_ context.Context, _ string) ([]instance.ActivityLog, error) {
 	return f.logs, nil
 }
-func (f *fakeInstanceService) ChangeLabel(_ context.Context, _ string, name string) error {
-	f.renamedTo = name
-	if f.got != nil {
-		f.got.Name = name
+func (f *fakeInstanceService) ChangeHostname(_ context.Context, _ string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error) {
+	f.renameRequest = &req
+	f.renamedTo = req.Hostname
+	if f.renameErr != nil {
+		return nil, f.renameErr
 	}
-	return nil
+	if f.got != nil && len(f.gotQueue) == 0 {
+		f.got.Name = req.Hostname
+		f.got.Hostname = req.Hostname
+	}
+	return &instance.ActionResponse{}, nil
 }
 func (f *fakeInstanceService) ChangePlan(_ context.Context, _ string, req instance.ChangePlanRequest) (*instance.ActionResponse, error) {
 	f.changedPlan = &req
@@ -170,33 +186,35 @@ func (f *fakeInstanceService) Cancel(_ context.Context, slug string, deletePubli
 }
 
 type instanceStateModel struct {
-	ID              types.String   `tfsdk:"id"`
-	Name            types.String   `tfsdk:"name"`
-	CloudProvider   types.String   `tfsdk:"cloud_provider"`
-	Region          types.String   `tfsdk:"region"`
-	Template        types.String   `tfsdk:"template"`
-	Plan            types.String   `tfsdk:"plan"`
-	CPU             types.Int64    `tfsdk:"cpu"`
-	MemoryGB        types.Int64    `tfsdk:"memory_gb"`
-	DiskGB          types.Int64    `tfsdk:"disk_gb"`
-	BillingCycle    types.String   `tfsdk:"billing_cycle"`
-	Project         types.String   `tfsdk:"project"`
-	SSHKey          types.String   `tfsdk:"ssh_key"`
-	Network         types.String   `tfsdk:"network"`
-	NetworkPlan     types.String   `tfsdk:"network_plan"`
-	NetworkType     types.String   `tfsdk:"network_type"`
-	VrPlan          types.String   `tfsdk:"vr_plan"`
-	Networks        types.List     `tfsdk:"networks"`
-	DefaultNetwork  types.String   `tfsdk:"default_network"`
-	AssignPublicIP  types.Bool     `tfsdk:"assign_public_ip"`
-	StorageCategory types.String   `tfsdk:"storage_category"`
-	UserData        types.String   `tfsdk:"user_data"`
-	Tags            types.Map      `tfsdk:"tags"`
-	Slug            types.String   `tfsdk:"slug"`
-	State           types.String   `tfsdk:"state"`
-	PrivateIP       types.String   `tfsdk:"private_ip"`
-	PublicIP        types.String   `tfsdk:"public_ip"`
-	Timeouts        timeouts.Value `tfsdk:"timeouts"`
+	ID               types.String   `tfsdk:"id"`
+	Name             types.String   `tfsdk:"name"`
+	CloudProvider    types.String   `tfsdk:"cloud_provider"`
+	Region           types.String   `tfsdk:"region"`
+	Template         types.String   `tfsdk:"template"`
+	Plan             types.String   `tfsdk:"plan"`
+	BlockstoragePlan types.String   `tfsdk:"blockstorage_plan"`
+	RootDiskSize     types.Int64    `tfsdk:"root_disk_size"`
+	CPU              types.Int64    `tfsdk:"cpu"`
+	MemoryGB         types.Int64    `tfsdk:"memory_gb"`
+	DiskGB           types.Int64    `tfsdk:"disk_gb"`
+	BillingCycle     types.String   `tfsdk:"billing_cycle"`
+	Project          types.String   `tfsdk:"project"`
+	SSHKey           types.String   `tfsdk:"ssh_key"`
+	Network          types.String   `tfsdk:"network"`
+	NetworkPlan      types.String   `tfsdk:"network_plan"`
+	NetworkType      types.String   `tfsdk:"network_type"`
+	VrPlan           types.String   `tfsdk:"vr_plan"`
+	Networks         types.List     `tfsdk:"networks"`
+	DefaultNetwork   types.String   `tfsdk:"default_network"`
+	AssignPublicIP   types.Bool     `tfsdk:"assign_public_ip"`
+	StorageCategory  types.String   `tfsdk:"storage_category"`
+	UserData         types.String   `tfsdk:"user_data"`
+	Tags             types.Map      `tfsdk:"tags"`
+	Slug             types.String   `tfsdk:"slug"`
+	State            types.String   `tfsdk:"state"`
+	PrivateIP        types.String   `tfsdk:"private_ip"`
+	PublicIP         types.String   `tfsdk:"public_ip"`
+	Timeouts         timeouts.Value `tfsdk:"timeouts"`
 }
 
 func instanceSchema(t *testing.T) resource.SchemaResponse {
@@ -222,33 +240,35 @@ func instanceValues(t *testing.T, id string) map[string]tftypes.Value {
 		idVal = tftypes.NewValue(tftypes.String, id)
 	}
 	return map[string]tftypes.Value{
-		"id":               idVal,
-		"name":             tftypes.NewValue(tftypes.String, "vm1"),
-		"cloud_provider":   tftypes.NewValue(tftypes.String, "nimbo"),
-		"region":           tftypes.NewValue(tftypes.String, "yow-1"),
-		"template":         tftypes.NewValue(tftypes.String, "ubuntu-24"),
-		"plan":             tftypes.NewValue(tftypes.String, "ci1.small"),
-		"cpu":              tftypes.NewValue(tftypes.Number, nil),
-		"memory_gb":        tftypes.NewValue(tftypes.Number, nil),
-		"disk_gb":          tftypes.NewValue(tftypes.Number, nil),
-		"billing_cycle":    tftypes.NewValue(tftypes.String, "hourly"),
-		"project":          null(),
-		"ssh_key":          null(),
-		"network":          null(),
-		"network_plan":     null(),
-		"network_type":     tftypes.NewValue(tftypes.String, "Isolated"),
-		"vr_plan":          null(),
-		"networks":         tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
-		"default_network":  null(),
-		"assign_public_ip": tftypes.NewValue(tftypes.Bool, nil),
-		"storage_category": null(),
-		"user_data":        null(),
-		"tags":             tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil),
-		"slug":             idVal,
-		"state":            null(),
-		"private_ip":       null(),
-		"public_ip":        null(),
-		"timeouts":         timeoutsNull(t, instanceSchema(t)),
+		"id":                idVal,
+		"name":              tftypes.NewValue(tftypes.String, "vm1"),
+		"cloud_provider":    tftypes.NewValue(tftypes.String, "nimbo"),
+		"region":            tftypes.NewValue(tftypes.String, "yow-1"),
+		"template":          tftypes.NewValue(tftypes.String, "ubuntu-24"),
+		"plan":              tftypes.NewValue(tftypes.String, "ci1.small"),
+		"blockstorage_plan": tftypes.NewValue(tftypes.String, "b2g1"),
+		"root_disk_size":    tftypes.NewValue(tftypes.Number, int64(100)),
+		"cpu":               tftypes.NewValue(tftypes.Number, nil),
+		"memory_gb":         tftypes.NewValue(tftypes.Number, nil),
+		"disk_gb":           tftypes.NewValue(tftypes.Number, nil),
+		"billing_cycle":     tftypes.NewValue(tftypes.String, "hourly"),
+		"project":           null(),
+		"ssh_key":           null(),
+		"network":           null(),
+		"network_plan":      null(),
+		"network_type":      tftypes.NewValue(tftypes.String, "Isolated"),
+		"vr_plan":           null(),
+		"networks":          tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, nil),
+		"default_network":   null(),
+		"assign_public_ip":  tftypes.NewValue(tftypes.Bool, nil),
+		"storage_category":  tftypes.NewValue(tftypes.String, "nvme"),
+		"user_data":         null(),
+		"tags":              tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, nil),
+		"slug":              idVal,
+		"state":             null(),
+		"private_ip":        null(),
+		"public_ip":         null(),
+		"timeouts":          timeoutsNull(t, instanceSchema(t)),
 	}
 }
 
@@ -450,9 +470,49 @@ func TestInstanceResource_createSendsFixedPlan(t *testing.T) {
 	if svc.createReq.CustomPlan != nil {
 		t.Errorf("CustomPlan = %#v, want nil", svc.createReq.CustomPlan)
 	}
+	if svc.createReq.BlockstoragePlan != "b2g1" {
+		t.Errorf("BlockstoragePlan = %q, want b2g1", svc.createReq.BlockstoragePlan)
+	}
+	if svc.createReq.BlockstorageCustomPlan == nil || svc.createReq.BlockstorageCustomPlan.Storage != 100 {
+		t.Errorf("BlockstorageCustomPlan = %#v, want storage=100", svc.createReq.BlockstorageCustomPlan)
+	}
 }
 
-func TestInstanceResource_createSendsCustomPlan(t *testing.T) {
+func TestInstanceResource_createRejectsMissingOrUnknownFixedStorageInputs(t *testing.T) {
+	for name, set := range map[string]func(map[string]tftypes.Value){
+		"missing blockstorage plan": func(vals map[string]tftypes.Value) {
+			vals["blockstorage_plan"] = tftypes.NewValue(tftypes.String, nil)
+		},
+		"unknown root disk size": func(vals map[string]tftypes.Value) {
+			vals["root_disk_size"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+		},
+		"zero root disk size": func(vals map[string]tftypes.Value) {
+			vals["root_disk_size"] = tftypes.NewValue(tftypes.Number, int64(0))
+		},
+		"custom storage plan": func(vals map[string]tftypes.Value) {
+			vals["blockstorage_plan"] = tftypes.NewValue(tftypes.String, "custom_plan")
+		},
+		"missing storage category": func(vals map[string]tftypes.Value) {
+			vals["storage_category"] = tftypes.NewValue(tftypes.String, nil)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			svc := &fakeInstanceService{}
+			r := internalprovider.NewInstanceResourceWithService(svc)
+			schResp := instanceSchema(t)
+			vals := instanceValues(t, "")
+			set(vals)
+			createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(instanceTFType(t), vals)}}
+			createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(instanceTFType(t), nil)}}
+			r.Create(context.Background(), createReq, createResp)
+			if !createResp.Diagnostics.HasError() {
+				t.Fatal("expected invalid fixed storage input to prevent creation")
+			}
+		})
+	}
+}
+
+func TestInstanceResource_createRejectsLegacyCustomPlan(t *testing.T) {
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
 		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Running"},
@@ -468,17 +528,11 @@ func TestInstanceResource_createSendsCustomPlan(t *testing.T) {
 	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, vals)}}
 	createResp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
 	r.Create(context.Background(), createReq, createResp)
-	if createResp.Diagnostics.HasError() {
-		t.Fatalf("unexpected error: %v", createResp.Diagnostics)
+	if !createResp.Diagnostics.HasError() {
+		t.Fatal("expected legacy custom plan creation to be rejected")
 	}
-	if svc.createReq.Plan != "" {
-		t.Errorf("Plan = %q, want empty for custom plan", svc.createReq.Plan)
-	}
-	if svc.createReq.CustomPlan == nil {
-		t.Fatal("CustomPlan = nil, want custom plan")
-	}
-	if svc.createReq.CustomPlan.CPU != "2" || svc.createReq.CustomPlan.Memory != "4" || svc.createReq.CustomPlan.Storage != "45" {
-		t.Errorf("CustomPlan = %#v, want cpu=2 memory=4 storage=45", svc.createReq.CustomPlan)
+	if svc.createReq.Plan != "" || svc.createReq.CustomPlan != nil {
+		t.Errorf("Create = %#v, want no request for rejected legacy custom plan", svc.createReq)
 	}
 }
 
@@ -1034,7 +1088,7 @@ func TestInstanceResource_networkTypeNoReplaceOnUpgrade(t *testing.T) {
 	}
 }
 
-func TestInstanceResource_billingCycleRequiresReplaceForCustomPlan(t *testing.T) {
+func TestInstanceResource_legacyCustomPlanBillingCycleRequiresReplacement(t *testing.T) {
 	schResp := instanceSchema(t)
 	tfType := instanceTFType(t)
 
@@ -1069,7 +1123,7 @@ func TestInstanceResource_billingCycleRequiresReplaceForCustomPlan(t *testing.T)
 		m.PlanModifyString(context.Background(), req, &planResp)
 	}
 	if !planResp.RequiresReplace {
-		t.Fatal("billing_cycle change on custom-plan instance did not require replacement")
+		t.Fatal("legacy custom-plan billing cycle change must require replacement")
 	}
 }
 
@@ -1140,6 +1194,10 @@ func instanceVariant(t *testing.T, name, plan, billing, userData string, tags ma
 }
 
 func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap map[string]tftypes.Value) resource.UpdateResponse {
+	return updateInstanceWithContext(t, context.Background(), svc, planMap, stateMap)
+}
+
+func updateInstanceWithContext(t *testing.T, ctx context.Context, svc *fakeInstanceService, planMap, stateMap map[string]tftypes.Value) resource.UpdateResponse {
 	t.Helper()
 	r := internalprovider.NewInstanceResourceWithService(svc)
 	schResp := instanceSchema(t)
@@ -1149,8 +1207,74 @@ func updateInstance(t *testing.T, svc *fakeInstanceService, planMap, stateMap ma
 		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateMap)},
 	}
 	updateResp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, stateMap)}}
-	r.Update(context.Background(), updateReq, updateResp)
+	r.Update(ctx, updateReq, updateResp)
 	return *updateResp
+}
+
+func TestInstanceResource_updateWaitsForHostnameChange(t *testing.T) {
+	restore := internalprovider.SetInstanceRenamePollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	before := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	after := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm2", Hostname: "vm2", State: "Stopped"}
+	svc := &fakeInstanceService{
+		got:        after,
+		gotQueue:   []*instance.VirtualMachine{before, after, after},
+		metaStates: []string{"Starting", "Stopped"},
+	}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo after rename", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.renameRequest == nil || svc.renameRequest.Name != "vm1" || svc.renameRequest.Hostname != "vm2" {
+		t.Fatalf("ChangeHostname request = %#v, want current name vm1 and hostname vm2", svc.renameRequest)
+	}
+	if svc.changedUD == nil || *svc.changedUD != "echo after rename" {
+		t.Fatalf("startup script change did not run after hostname change: %v", svc.changedUD)
+	}
+	if svc.getCalls < 4 {
+		t.Errorf("Get calls = %d, want at least 4 to wait for the asynchronous rename and stable state before refresh", svc.getCalls)
+	}
+}
+
+func TestInstanceResource_updateStopsAfterHostnameChangeError(t *testing.T) {
+	svc := &fakeInstanceService{
+		got:       &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"},
+		renameErr: errors.New("rename request failed"),
+	}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo must not run", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected hostname change error")
+	}
+	if svc.changedUD != nil {
+		t.Fatalf("startup script changed after hostname error: %q", *svc.changedUD)
+	}
+}
+
+func TestInstanceResource_updateStopsAfterHostnameChangeTimeout(t *testing.T) {
+	restore := internalprovider.SetInstanceRenamePollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	before := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	svc := &fakeInstanceService{got: before, gotQueue: []*instance.VirtualMachine{before}}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.small", "hourly", "echo must not run", nil)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Millisecond)
+	defer cancel()
+
+	resp := updateInstanceWithContext(t, ctx, svc, plan, state)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected hostname change timeout")
+	}
+	if svc.changedUD != nil {
+		t.Fatalf("startup script changed after hostname timeout: %q", *svc.changedUD)
+	}
 }
 
 // TestInstanceResource_updateResizeIsTransparent verifies that changing the plan
@@ -1229,6 +1353,31 @@ func TestInstanceResource_resizeWithStaleCachedState(t *testing.T) {
 	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
 		t.Errorf("ChangePlan not called with new plan: %+v", svc.changedPlan)
 	}
+	var final instanceStateModel
+	if diags := resp.State.Get(context.Background(), &final); diags.HasError() {
+		t.Fatalf("reading final state: %v", diags)
+	}
+	if final.State.ValueString() != "Running" {
+		t.Errorf("final state = %q, want live Running state", final.State.ValueString())
+	}
+}
+
+func TestInstanceResource_updateRenameThenResizeUsesLiveState(t *testing.T) {
+	vm := &instance.VirtualMachine{Slug: "vm1-abc", Name: "vm1", Hostname: "vm1", State: "Stopped"}
+	svc := &fakeInstanceService{got: vm, metaState: "Running", staleCache: true}
+	state := instanceVariant(t, "vm1", "ci1.small", "hourly", "", nil)
+	plan := instanceVariant(t, "vm2", "ci1.large", "hourly", "", nil)
+
+	resp := updateInstance(t, svc, plan, state)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.stopCalled != 1 || svc.startCalled != 1 {
+		t.Errorf("stop=%d start=%d, want 1/1 using the live Running state", svc.stopCalled, svc.startCalled)
+	}
+	if svc.changedPlan == nil || svc.changedPlan.Plan != "ci1.large" {
+		t.Errorf("ChangePlan not called with new plan: %+v", svc.changedPlan)
+	}
 }
 
 func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
@@ -1248,9 +1397,7 @@ func TestInstanceResource_resizeRestartsOnFailure(t *testing.T) {
 	}
 }
 
-// TestInstanceResource_createCleansUpOnWaitFailure verifies that a VM which never
-// reaches Running is deleted so it is not orphaned outside Terraform state.
-func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
+func TestInstanceResource_createWaitFailurePreservesAcceptedInstance(t *testing.T) {
 	svc := &fakeInstanceService{
 		created: &instance.VirtualMachine{Slug: "vm1-abc", State: "Pending"},
 		got:     &instance.VirtualMachine{Slug: "vm1-abc", State: "Failed"},
@@ -1259,11 +1406,18 @@ func TestInstanceResource_createCleansUpOnWaitFailure(t *testing.T) {
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error when instance fails to provision")
 	}
-	if len(svc.canceled) != 1 || svc.canceled[0] != "vm1-abc" {
-		t.Errorf("cleanup Cancel called with %v, want [vm1-abc]", svc.canceled)
+	if len(svc.canceled) != 0 {
+		t.Errorf("Cancel called with %v, want no automatic cancellation", svc.canceled)
 	}
-	if len(svc.canceledPublicIP) != 1 || !svc.canceledPublicIP[0] {
-		t.Errorf("cleanup Cancel deletePublicIP = %v, want [true]", svc.canceledPublicIP)
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading preserved state: %v", diags)
+	}
+	if got.ID.IsUnknown() || got.ID.ValueString() != "vm1-abc" || got.Slug.IsUnknown() || got.Slug.ValueString() != "vm1-abc" {
+		t.Errorf("preserved identity = id:%#v slug:%#v, want vm1-abc", got.ID, got.Slug)
+	}
+	if got.State.IsUnknown() || got.State.ValueString() != "Pending" {
+		t.Errorf("preserved state = %#v, want Pending", got.State)
 	}
 }
 
@@ -1380,6 +1534,17 @@ func TestInstanceResource_deleteKeepsIPWhenAssignPublicIPFalse(t *testing.T) {
 	}
 }
 
+func TestInstanceResource_deleteRejectsStartingInstance(t *testing.T) {
+	svc := &fakeInstanceService{metaState: "Starting"}
+	resp := deleteInstance(t, svc, "vm1-abc")
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected deletion of a Starting instance to be rejected")
+	}
+	if len(svc.canceled) != 0 {
+		t.Errorf("Cancel called with %v, want no cancellation before lifecycle preflight passes", svc.canceled)
+	}
+}
+
 func TestInstanceResource_delete404IsNoOp(t *testing.T) {
 	svc := &fakeInstanceService{
 		cancelErr: &apierrors.APIError{StatusCode: 404},
@@ -1482,6 +1647,21 @@ func TestInstanceResource_importCustomPlanSeedsCreateOnlyValues(t *testing.T) {
 				t.Fatalf("%s plan modifier required replacement for matching imported custom-plan value", tc.name)
 			}
 		})
+	}
+}
+
+func TestInstanceResource_importFixedStorageSeedsCreateOnlyValues(t *testing.T) {
+	id := "vm1-abc/nimbo/yow-1/ubuntu-24/ci1.small/hourly/proj/key/net/netplan/nvme/Isolated/vrplan/net-a/b1g1/100"
+	resp := importInstance(t, id)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got instanceStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.BlockstoragePlan.ValueString() != "b1g1" || got.RootDiskSize.ValueInt64() != 100 {
+		t.Fatalf("fixed storage = %q/%d, want b1g1/100", got.BlockstoragePlan.ValueString(), got.RootDiskSize.ValueInt64())
 	}
 }
 

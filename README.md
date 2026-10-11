@@ -16,7 +16,7 @@ store's S3-compatible gateway through the same SDK. The SDK resolves the gateway
 endpoint from the selected object-storage instance, without a hardcoded regional
 endpoint. The provider uses the [zcp CLI](https://github.com/zsoftly/zcp-cli).
 
-44 resources and 14 data sources. Full reference under [docs/](docs/), runnable
+45 resources and 14 data sources. Full reference under [docs/](docs/), runnable
 configurations under [examples/](examples/).
 
 ## Requirements
@@ -31,7 +31,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 0.3.0"
+      version = "~> 1.0.0"
     }
   }
 }
@@ -40,27 +40,29 @@ provider "zcp" {
   default_project = "default-9"
 }
 
-data "zcp_region" "yul" {
-  slug = "yul-1"
+data "zcp_region" "yow" {
+  slug = "yow-1"
 }
 
 resource "zcp_network" "app" {
   name           = "app-network"
-  cloud_provider = data.zcp_region.yul.cloud_provider
-  region         = data.zcp_region.yul.slug
-  network_plan   = "pnet-yul"
+  cloud_provider = data.zcp_region.yow.cloud_provider
+  region         = data.zcp_region.yow.slug
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
 resource "zcp_instance" "web" {
-  name             = "web-01"
-  template         = "ubuntu-2604-lts-1"
-  plan             = "ca2sl"
-  billing_cycle    = "hourly"
-  network          = zcp_network.app.id
-  storage_category = "premium-ssd"
-  cloud_provider   = data.zcp_region.yul.cloud_provider
-  region           = data.zcp_region.yul.slug
+  name              = "web-01"
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 20
+  billing_cycle     = "hourly"
+  network           = zcp_network.app.id
+  storage_category  = "nvme"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
 }
 ```
 
@@ -85,7 +87,7 @@ make test-race   # race detector
 make fmt vet     # format and vet
 ```
 
-Local runs against an unreleased build:
+Local development runs:
 
 ```bash
 make dev-install   # prints the dev_overrides paths for .tofurc / .terraformrc
@@ -95,6 +97,8 @@ make install       # or install into the local OpenTofu plugin cache
 For SDK development, point a `go.work` file at a sibling `zcp-cli` checkout and
 keep it uncommitted. CI and releases build against the published
 `github.com/zsoftly/zcp-cli` module.
+
+The examples use provider v1.0.0.
 
 ## Releasing
 

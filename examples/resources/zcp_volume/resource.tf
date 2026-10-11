@@ -3,28 +3,30 @@ data "zcp_region" "yow" {
   slug = "yow-1"
 }
 
-# ── Custom-size volume (recommended) ──────────────────────────────────────────
-# Provide exactly one of `plan` or `size`. Size-based creation is the reliable
-# path today (see the provider docs note on plan-based creation).
+# ── Named storage tier with explicit capacity ──────────────────────────────────
+# Provide `plan`, `size`, or both. Set both to select capacity in a named tier.
 resource "zcp_volume" "data" {
   name             = "data-vol"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   billing_cycle    = "hourly"
   storage_category = "nvme"
+  plan             = "b1g1"
   size             = 20
 }
 
 # ── Custom-size volume attached to an instance on creation ────────────────────
 resource "zcp_instance" "db" {
-  name             = "db-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network_plan     = "pnet-yow"
-  storage_category = "nvme"
+  name              = "db-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network_plan      = "pnet-yow"
+  storage_category  = "nvme"
 }
 
 resource "zcp_volume" "db_data" {
@@ -33,7 +35,7 @@ resource "zcp_volume" "db_data" {
   region           = data.zcp_region.yow.slug
   billing_cycle    = "hourly"
   storage_category = "nvme"
-  size             = 100 # GB — mutually exclusive with `plan`
+  size             = 100 # GB
   vm               = zcp_instance.db.id
 }
 
@@ -47,4 +49,4 @@ output "data_volume_slug" {
 # terraform import zcp_volume.data \
 #   '<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>[/<plan>/<project>/<vm>]'
 #   e.g. terraform import zcp_volume.data 'data-vol-abc/nimbo/yow-1/hourly/nvme/b1g1'
-# `size` cannot be imported via the ID; set it in config for size-based volumes.
+# `size` cannot be imported via the ID; set it in configuration when needed.

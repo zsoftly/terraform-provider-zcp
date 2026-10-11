@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -117,12 +118,20 @@ func volumeValues(t *testing.T, id, plan string, size *int64, vm string) map[str
 }
 
 func createVolume(t *testing.T, svc *fakeVolumeService, plan string, size *int64, vm string) resource.CreateResponse {
+	return createVolumeWithConfig(t, svc, plan, size, plan, size, vm)
+}
+
+func createVolumeWithConfig(t *testing.T, svc *fakeVolumeService, plan string, size *int64, configPlan string, configSize *int64, vm string) resource.CreateResponse {
 	t.Helper()
 	r := internalprovider.NewVolumeResourceWithService(svc)
 	schResp := volumeSchema(t)
 	tfType := volumeTFType(t)
 	planVal := tftypes.NewValue(tfType, volumeValues(t, "", plan, size, vm))
-	createReq := resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: planVal}}
+	configVal := tftypes.NewValue(tfType, volumeValues(t, "", configPlan, configSize, vm))
+	createReq := resource.CreateRequest{
+		Config: tfsdk.Config{Schema: schResp.Schema, Raw: configVal},
+		Plan:   tfsdk.Plan{Schema: schResp.Schema, Raw: planVal},
+	}
 	createResp := &resource.CreateResponse{
 		State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)},
 	}
@@ -160,6 +169,56 @@ func TestVolumeResource_createWithSize(t *testing.T) {
 	}
 }
 
+func TestVolumeResource_createWithPlanAndSize(t *testing.T) {
+	svc := &fakeVolumeService{created: &volume.Volume{Slug: "vol1-abc", Name: "vol1"}}
+	size := int64(50)
+	resp := createVolume(t, svc, "b1g1", &size, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.createReq.Plan != "b1g1" {
+		t.Errorf("Plan = %q, want b1g1", svc.createReq.Plan)
+	}
+	if !svc.createReq.IsCustomPlan || svc.createReq.CustomPlan == nil || svc.createReq.CustomPlan.Storage != 50 {
+		t.Errorf("expected plan and custom-plan size 50, got %+v", svc.createReq)
+	}
+}
+
+func TestVolumeResource_createPlanOnlyDoesNotReusePriorSize(t *testing.T) {
+	svc := &fakeVolumeService{created: &volume.Volume{Slug: "vol1-abc", Name: "vol1"}}
+	priorSize := int64(10)
+	resp := createVolumeWithConfig(t, svc, "b1g1", &priorSize, "b1g1", nil, "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if svc.createReq.IsCustomPlan || svc.createReq.CustomPlan != nil {
+		t.Errorf("plan-only replacement reused size: %+v", svc.createReq)
+	}
+}
+
+func TestVolumeResource_createWithUnknownConfiguredSizeUsesResolvedPlan(t *testing.T) {
+	svc := &fakeVolumeService{created: &volume.Volume{Slug: "vol1-abc", Name: "vol1"}}
+	r := internalprovider.NewVolumeResourceWithService(svc)
+	schResp := volumeSchema(t)
+	tfType := volumeTFType(t)
+	size := int64(50)
+	planVal := tftypes.NewValue(tfType, volumeValues(t, "", "b1g1", &size, ""))
+	configVals := volumeValues(t, "", "b1g1", nil, "")
+	configVals["size"] = tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)
+	configVal := tftypes.NewValue(tfType, configVals)
+	resp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(tfType, nil)}}
+	r.Create(context.Background(), resource.CreateRequest{
+		Config: tfsdk.Config{Schema: schResp.Schema, Raw: configVal},
+		Plan:   tfsdk.Plan{Schema: schResp.Schema, Raw: planVal},
+	}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if !svc.createReq.IsCustomPlan || svc.createReq.CustomPlan == nil || svc.createReq.CustomPlan.Storage != 50 {
+		t.Errorf("expected resolved custom-plan size 50, got %+v", svc.createReq)
+	}
+}
+
 func TestVolumeResource_createAttachesVM(t *testing.T) {
 	svc := &fakeVolumeService{created: &volume.Volume{Slug: "vol1-abc", Name: "vol1"}}
 	resp := createVolume(t, svc, "b1g1", nil, "vm-xyz")
@@ -180,8 +239,25 @@ func TestVolumeResource_validateConfigBothSet(t *testing.T) {
 	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfgVal}}
 	var resp resource.ValidateConfigResponse
 	r.ValidateConfig(context.Background(), req, &resp)
-	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected error when both plan and size are set")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("plan and size config should validate: %v", resp.Diagnostics)
+	}
+}
+
+func TestVolumeResource_validateConfigNonPositiveSize(t *testing.T) {
+	for _, size := range []int64{0, -1} {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			r := internalprovider.NewVolumeResource().(resource.ResourceWithValidateConfig)
+			schResp := volumeSchema(t)
+			tfType := volumeTFType(t)
+			cfgVal := tftypes.NewValue(tfType, volumeValues(t, "", "b1g1", &size, ""))
+			req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfgVal}}
+			var resp resource.ValidateConfigResponse
+			r.ValidateConfig(context.Background(), req, &resp)
+			if !resp.Diagnostics.HasError() {
+				t.Fatalf("expected error when size is %d", size)
+			}
+		})
 	}
 }
 
@@ -195,6 +271,19 @@ func TestVolumeResource_validateConfigNeitherSet(t *testing.T) {
 	r.ValidateConfig(context.Background(), req, &resp)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected error when neither plan nor size is set")
+	}
+}
+
+func TestVolumeResource_validateConfigBlankPlan(t *testing.T) {
+	r := internalprovider.NewVolumeResource().(resource.ResourceWithValidateConfig)
+	schResp := volumeSchema(t)
+	tfType := volumeTFType(t)
+	cfgVal := tftypes.NewValue(tfType, volumeValues(t, "", "   ", nil, ""))
+	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfgVal}}
+	var resp resource.ValidateConfigResponse
+	r.ValidateConfig(context.Background(), req, &resp)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected error when plan is blank and size is unset")
 	}
 }
 

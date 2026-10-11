@@ -48,3 +48,4 @@ output "plan_monthly" {
 - `storage_gb` (Number) Root disk size in gigabytes.
 - `hourly_price` (Number) Hourly price in account currency.
 - `monthly_price` (Number) Monthly price in account currency.
+- `tag` (String) Plan tag.

@@ -37,7 +37,7 @@ type instanceServiceIface interface {
 	Get(ctx context.Context, slug string) (*instance.VirtualMachine, error)
 	Meta(ctx context.Context, slug string) (*instance.VMMeta, error)
 	ActivityLogs(ctx context.Context, slug string) ([]instance.ActivityLog, error)
-	ChangeLabel(ctx context.Context, slug, name string) error
+	ChangeHostname(ctx context.Context, slug string, req instance.ChangeLabelRequest) (*instance.ActionResponse, error)
 	ChangePlan(ctx context.Context, slug string, req instance.ChangePlanRequest) (*instance.ActionResponse, error)
 	ChangeStartupScript(ctx context.Context, slug string, req instance.ChangeStartupScriptRequest) (*instance.ActionResponse, error)
 	CreateTag(ctx context.Context, slug string, req instance.TagRequest) (*instance.ActionResponse, error)
@@ -48,31 +48,18 @@ type instanceServiceIface interface {
 	Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error
 }
 
-// instanceService adapts the zcp-cli instance.Service, overriding the rename
-// operation. The released CLI's ChangeHostname posts {name, hostname} to
-// /change-label, but the API requires the field `vm_label` (its validation
-// rejects the CLI payload with "The vm label field is required" — a known,
-// unfixed CLI bug). We post the correct body directly via the shared HTTP client
-// so display-name changes apply in place.
+// instanceService adapts the zcp-cli instance.Service for provider-specific
+// cancellation behavior.
 type instanceService struct {
 	*instance.Service
 	client *httpclient.Client
 }
 
-func (s *instanceService) ChangeLabel(ctx context.Context, slug, name string) error {
-	body := map[string]string{"vm_label": name}
-	var resp instance.ActionResponse
-	if err := s.client.Post(ctx, "/virtual-machines/"+slug+"/change-label", body, &resp); err != nil {
-		return err
-	}
-	return nil
-}
-
 // Cancel deletes a VM through the unified service-cancellation workflow
 // (POST /billing/service-cancel-requests/{slug}) the CMP Web UI uses. Unlike the
-// direct DELETE endpoint (Service.Delete), this releases the VM's auto-assigned
-// public IP when deletePublicIP is set, so destroy does not strand a billed
-// address. Deletion is asynchronous; callers poll until the VM is gone.
+// SDK deletion operation, this releases the VM's auto-assigned public IP when
+// deletePublicIP is set, so destroy does not strand a billed address. Deletion
+// is asynchronous; callers poll until the VM is gone.
 func (s *instanceService) Cancel(ctx context.Context, slug string, deletePublicIP bool, billingCycle string) error {
 	dip := deletePublicIP
 	req := billing.CancelServiceRequest{
@@ -115,12 +102,16 @@ type instanceResource struct {
 }
 
 type instanceResourceModel struct {
-	ID              types.String `tfsdk:"id"`
-	Name            types.String `tfsdk:"name"`
-	CloudProvider   types.String `tfsdk:"cloud_provider"`
-	Region          types.String `tfsdk:"region"`
-	Template        types.String `tfsdk:"template"`
-	Plan            types.String `tfsdk:"plan"`
+	ID               types.String `tfsdk:"id"`
+	Name             types.String `tfsdk:"name"`
+	CloudProvider    types.String `tfsdk:"cloud_provider"`
+	Region           types.String `tfsdk:"region"`
+	Template         types.String `tfsdk:"template"`
+	Plan             types.String `tfsdk:"plan"`
+	BlockstoragePlan types.String `tfsdk:"blockstorage_plan"`
+	RootDiskSize     types.Int64  `tfsdk:"root_disk_size"`
+	// Legacy custom-plan fields stay in the schema so existing state remains
+	// decodable and destroyable. New instances use the fixed plan fields above.
 	CPU             types.Int64  `tfsdk:"cpu"`
 	MemoryGB        types.Int64  `tfsdk:"memory_gb"`
 	DiskGB          types.Int64  `tfsdk:"disk_gb"`
@@ -157,7 +148,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 	requiresReplace := []planmodifier.String{stringplanmodifier.RequiresReplace()}
 	useStateForUnknown := []planmodifier.String{stringplanmodifier.UseStateForUnknown()}
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a ZCP virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, fixed-plan `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place; `cloud_provider`, `region`, `template`, custom plan inputs, and custom-plan `billing_cycle` force replacement. The instance's runtime power state is not managed by Terraform — it is reported read-only in `state`, and the provider only stops/starts the VM internally when a fixed-plan resize requires it.",
+		MarkdownDescription: "Manages a virtual machine instance. Create blocks until the instance reaches the `Running` state. `name`, `plan`/`billing_cycle`, `user_data`, and `tags` are updated in place. Changing `name` also changes the hostname. The change can restart a running instance or start a stopped instance. The provider waits for it to complete. The instance runtime state is reported read-only in `state`.",
 		Attributes: map[string]schema.Attribute{
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -166,7 +157,7 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"name": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Display name of the instance. Updated in place. (The instance's hostname is set from this value at creation and, like all clouds, is not changed afterward.)",
+				MarkdownDescription: "Instance name. Updated in place. Changing it also changes the hostname. The change can restart a running instance or start a stopped instance. The provider waits for it to complete.",
 			},
 			"cloud_provider": schema.StringAttribute{
 				Required:            true,
@@ -185,31 +176,44 @@ func (r *instanceResource) Schema(ctx context.Context, _ resource.SchemaRequest,
 			},
 			"plan": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "Compute plan slug. Run `zcp plan vm` to list available plans. Exactly one of `plan` or the complete custom plan inputs (`cpu`, `memory_gb`, and `disk_gb`) must be set. Updated in place (resize) via the change-plan operation.",
+				MarkdownDescription: "Compute plan slug. Required for new instances. Updated in place through the change-plan operation.",
+			},
+			"blockstorage_plan": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Root-volume storage tier slug. Required for new instances. Changing this forces replacement.",
+				PlanModifiers:       requiresReplace,
+			},
+			"root_disk_size": schema.Int64Attribute{
+				Optional:            true,
+				MarkdownDescription: "Root-volume capacity in GB for the selected storage tier. Required for new instances and must be greater than zero. Changing this forces replacement.",
+				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"cpu": schema.Int64Attribute{
 				Optional:            true,
-				MarkdownDescription: "Number of vCPUs for a custom VM plan. Must be set together with `memory_gb` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				DeprecationMessage:  "Use plan, blockstorage_plan, and root_disk_size for new instances. This field remains for legacy state compatibility.",
+				MarkdownDescription: "Legacy custom-plan CPU value retained for state compatibility.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"memory_gb": schema.Int64Attribute{
 				Optional:            true,
-				MarkdownDescription: "RAM in GB for a custom VM plan. Must be greater than 0 and no more than 256 GB. Must be set together with `cpu` and `disk_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				DeprecationMessage:  "Use plan, blockstorage_plan, and root_disk_size for new instances. This field remains for legacy state compatibility.",
+				MarkdownDescription: "Legacy custom-plan memory value retained for state compatibility.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"disk_gb": schema.Int64Attribute{
 				Optional:            true,
-				MarkdownDescription: "Root disk size in GB for a custom VM plan. Must be greater than 0. Must be set together with `cpu` and `memory_gb`, and cannot be used with `plan`. Changing this forces replacement.",
+				DeprecationMessage:  "Use blockstorage_plan and root_disk_size for new instances. This field remains for legacy state compatibility.",
+				MarkdownDescription: "Legacy custom-plan disk value retained for state compatibility.",
 				PlanModifiers:       []planmodifier.Int64{int64planmodifier.RequiresReplace()},
 			},
 			"billing_cycle": schema.StringAttribute{
 				Required:            true,
-				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan` for fixed-plan instances. Changing this on a custom-plan instance forces replacement.",
+				MarkdownDescription: "Billing cycle (`hourly` or `monthly`). Updated in place together with `plan`.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplaceIf(
-						billingCycleRequiresReplaceForCustomPlan,
-						"Changing billing_cycle on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
-						"Changing `billing_cycle` on a custom-plan instance forces replacement because the change-plan API accepts only fixed catalogue plans.",
+						billingCycleRequiresReplaceForLegacyCustomPlan,
+						"Changing billing_cycle on a legacy custom-plan instance forces replacement.",
+						"Changing `billing_cycle` on a legacy custom-plan instance forces replacement.",
 					),
 				},
 			},
@@ -414,8 +418,6 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	validateInstancePlanConfig(&model, resp)
-
 	networkSet := !model.Network.IsNull() && !model.Network.IsUnknown()
 	networksKnown := !model.Networks.IsNull() && !model.Networks.IsUnknown()
 	planSet := !model.NetworkPlan.IsNull() && !model.NetworkPlan.IsUnknown()
@@ -581,107 +583,36 @@ func (r *instanceResource) ValidateConfig(ctx context.Context, req resource.Vali
 	}
 }
 
-const (
-	customPlanCPUMin      = int64(2)
-	customPlanMemoryMaxGB = int64(256)
-)
-
-func validateInstancePlanConfig(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
-	planUnknown := model.Plan.IsUnknown()
-	cpuUnknown := model.CPU.IsUnknown()
-	memoryUnknown := model.MemoryGB.IsUnknown()
-	diskUnknown := model.DiskGB.IsUnknown()
-	unknownAny := planUnknown || cpuUnknown || memoryUnknown || diskUnknown
-
-	planSet := !model.Plan.IsNull() && !planUnknown
-	cpuSet := !model.CPU.IsNull() && !cpuUnknown
-	memorySet := !model.MemoryGB.IsNull() && !memoryUnknown
-	diskSet := !model.DiskGB.IsNull() && !diskUnknown
-	customAny := cpuSet || memorySet || diskSet
-	customComplete := cpuSet && memorySet && diskSet
-
-	if customAny {
-		validateKnownCustomInstancePlanValues(model, resp)
+func validateInstanceCreate(model *instanceResourceModel) error {
+	if model.Plan.IsNull() || model.Plan.IsUnknown() || model.BlockstoragePlan.IsNull() || model.BlockstoragePlan.IsUnknown() || model.RootDiskSize.IsNull() || model.RootDiskSize.IsUnknown() || model.StorageCategory.IsNull() || model.StorageCategory.IsUnknown() {
+		return fmt.Errorf("plan, blockstorage_plan, root_disk_size, and storage_category must be known before creating an instance")
 	}
-	if unknownAny {
-		return
+	if strings.TrimSpace(model.Plan.ValueString()) == "" || model.Plan.ValueString() == "custom_plan" {
+		return fmt.Errorf("plan must name a compute plan; custom_plan is not supported")
 	}
-	if planSet && customAny {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("plan"),
-			"Conflicting instance plan configuration",
-			"`plan` cannot be used with `cpu`, `memory_gb`, or `disk_gb`. Omit `plan` to create a custom VM plan.",
-		)
-		return
+	if strings.TrimSpace(model.BlockstoragePlan.ValueString()) == "" || model.BlockstoragePlan.ValueString() == "custom_plan" {
+		return fmt.Errorf("blockstorage_plan must name a storage tier; custom_plan is not supported")
 	}
-	if !planSet && !customComplete {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("plan"),
-			"Missing instance plan configuration",
-			"Set `plan`, or set all custom VM plan inputs: `cpu`, `memory_gb`, and `disk_gb`.",
-		)
-		return
+	if model.RootDiskSize.ValueInt64() <= 0 {
+		return fmt.Errorf("root_disk_size must be greater than zero")
 	}
-	if customAny && !customComplete {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("cpu"),
-			"Incomplete custom instance plan",
-			"`cpu`, `memory_gb`, and `disk_gb` must all be set for a custom VM plan.",
-		)
-		return
+	if strings.TrimSpace(model.StorageCategory.ValueString()) == "" {
+		return fmt.Errorf("storage_category is required")
 	}
-	if !customAny {
-		return
+	if !model.CPU.IsNull() || !model.MemoryGB.IsNull() || !model.DiskGB.IsNull() {
+		return fmt.Errorf("cpu, memory_gb, and disk_gb are legacy fields and cannot create an instance; use plan, blockstorage_plan, and root_disk_size")
 	}
+	return nil
 }
 
-func validateKnownCustomInstancePlanValues(model *instanceResourceModel, resp *resource.ValidateConfigResponse) {
-	if !model.CPU.IsNull() && !model.CPU.IsUnknown() && model.CPU.ValueInt64() < customPlanCPUMin {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("cpu"),
-			"Invalid custom instance CPU",
-			fmt.Sprintf("`cpu` must be at least %d vCPU.", customPlanCPUMin),
-		)
-	}
-	if !model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() {
-		switch memory := model.MemoryGB.ValueInt64(); {
-		case memory <= 0:
-			resp.Diagnostics.AddAttributeError(
-				path.Root("memory_gb"),
-				"Invalid custom instance memory",
-				"`memory_gb` must be greater than 0 GB.",
-			)
-		case memory > customPlanMemoryMaxGB:
-			resp.Diagnostics.AddAttributeError(
-				path.Root("memory_gb"),
-				"Invalid custom instance memory",
-				fmt.Sprintf("`memory_gb` must be less than or equal to %d GB.", customPlanMemoryMaxGB),
-			)
-		}
-	}
-	if !model.DiskGB.IsNull() && !model.DiskGB.IsUnknown() && model.DiskGB.ValueInt64() <= 0 {
-		resp.Diagnostics.AddAttributeError(
-			path.Root("disk_gb"),
-			"Invalid custom instance disk",
-			"`disk_gb` must be greater than 0 GB.",
-		)
-	}
-}
-
-func billingCycleRequiresReplaceForCustomPlan(ctx context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+func billingCycleRequiresReplaceForLegacyCustomPlan(ctx context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
 	var state instanceResourceModel
 	resp.Diagnostics.Append(req.State.Get(ctx, &state)...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	resp.RequiresReplace = isCustomInstancePlan(&state)
-}
-
-func isCustomInstancePlan(model *instanceResourceModel) bool {
-	return (model.Plan.IsNull() || model.Plan.IsUnknown()) &&
-		!model.CPU.IsNull() && !model.CPU.IsUnknown() &&
-		!model.MemoryGB.IsNull() && !model.MemoryGB.IsUnknown() &&
-		!model.DiskGB.IsNull() && !model.DiskGB.IsUnknown()
+	resp.RequiresReplace = (state.Plan.IsNull() || state.Plan.IsUnknown()) &&
+		(!state.CPU.IsNull() || !state.MemoryGB.IsNull() || !state.DiskGB.IsNull())
 }
 
 func (r *instanceResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -692,6 +623,10 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 	if r.svc == nil {
 		resp.Diagnostics.AddError("Provider not configured", "zcp_instance cannot be created: bearer_token is missing.")
+		return
+	}
+	if err := validateInstanceCreate(&model); err != nil {
+		resp.Diagnostics.AddError("Invalid instance configuration", err.Error())
 		return
 	}
 
@@ -734,19 +669,22 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	}
 
 	createReq := instance.CreateRequest{
-		Name:            model.Name.ValueString(),
-		CloudProvider:   model.CloudProvider.ValueString(),
-		Project:         project,
-		Region:          model.Region.ValueString(),
-		BootSource:      "image",
-		Server:          "cloud-compute",
-		Template:        model.Template.ValueString(),
-		IsPublic:        isPublic,
-		NetworkType:     networkType,
-		Networks:        networks,
-		BillingCycle:    model.BillingCycle.ValueString(),
-		Plan:            model.Plan.ValueString(),
-		CustomPlan:      customInstancePlan(&model),
+		Name:             model.Name.ValueString(),
+		CloudProvider:    model.CloudProvider.ValueString(),
+		Project:          project,
+		Region:           model.Region.ValueString(),
+		BootSource:       "image",
+		Server:           "cloud-compute",
+		Template:         model.Template.ValueString(),
+		IsPublic:         isPublic,
+		NetworkType:      networkType,
+		Networks:         networks,
+		BillingCycle:     model.BillingCycle.ValueString(),
+		Plan:             model.Plan.ValueString(),
+		BlockstoragePlan: model.BlockstoragePlan.ValueString(),
+		BlockstorageCustomPlan: &instance.BlockstorageCustomPlan{
+			Storage: int(model.RootDiskSize.ValueInt64()),
+		},
 		OSFamily:        "Linux",
 		TemplateType:    "Operating System",
 		Hostname:        model.Name.ValueString(),
@@ -781,15 +719,13 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 
 	// Block until Running so both IPs are populated (mirrors the CLI --wait). This
 	// fails fast on a terminal provisioning state instead of blocking for the full
-	// create timeout. If the VM never becomes usable it is already provisioned but
-	// will not be saved to state, so clean it up to avoid an unmanaged orphan.
+	// create timeout. The API has already accepted the VM at this point, so retain
+	// its identity on failure. Terraform can then refresh or destroy it instead of
+	// losing track of a resource whose cancellation may be rejected in flight.
 	ready, err := r.waitForRunning(ctx, slug)
 	if err != nil {
-		// waitForRunning may have failed because the create-timeout context expired, so
-		// run the cleanup on a fresh bounded context that can still cancel the instance.
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 5*time.Minute)
-		r.cleanupAfterFailedCreate(cleanupCtx, slug, isPublic, cancelBillingCycleUnit(model.BillingCycle.ValueString()), &resp.Diagnostics)
-		cleanupCancel()
+		r.applyVMState(&model, vm)
+		resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
 		resp.Diagnostics.AddError(
 			"Instance did not reach Running",
 			fmt.Sprintf("instance %s was created but did not become Running: %s", slug, err.Error()),
@@ -819,19 +755,6 @@ func (r *instanceResource) Create(ctx context.Context, req resource.CreateReques
 	r.applyVMState(&model, ready)
 	r.fillPublicIP(ctx, &model, ready)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &model)...)
-}
-
-func customInstancePlan(model *instanceResourceModel) *instance.CustomPlan {
-	if model.CPU.IsNull() || model.CPU.IsUnknown() ||
-		model.MemoryGB.IsNull() || model.MemoryGB.IsUnknown() ||
-		model.DiskGB.IsNull() || model.DiskGB.IsUnknown() {
-		return nil
-	}
-	return &instance.CustomPlan{
-		CPU:     strconv.FormatInt(model.CPU.ValueInt64(), 10),
-		Memory:  strconv.FormatInt(model.MemoryGB.ValueInt64(), 10),
-		Storage: strconv.FormatInt(model.DiskGB.ValueInt64(), 10),
-	}
 }
 
 func (r *instanceResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -899,11 +822,18 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 
 	slug := state.ID.ValueString()
 
-	// 1. Display name (change-label). hostname is set once at create and never
-	//    changed — only the display name is mutable.
+	// 1. Name and hostname. The API applies this asynchronously, so wait for the
+	//    returned fields and a stable live state before later mutations.
 	if !plan.Name.Equal(state.Name) {
-		if err := r.svc.ChangeLabel(ctx, slug, plan.Name.ValueString()); err != nil {
-			resp.Diagnostics.AddError("Failed to rename instance", err.Error())
+		if _, err := r.svc.ChangeHostname(ctx, slug, instance.ChangeLabelRequest{
+			Name:     state.Name.ValueString(),
+			Hostname: plan.Name.ValueString(),
+		}); err != nil {
+			resp.Diagnostics.AddError("Failed to change instance hostname", err.Error())
+			return
+		}
+		if err := r.waitForHostname(ctx, slug, plan.Name.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Failed to wait for instance hostname change", err.Error())
 			return
 		}
 	}
@@ -938,15 +868,79 @@ func (r *instanceResource) Update(ctx context.Context, req resource.UpdateReques
 		}
 	}
 
-	// Re-read for consistent computed values (state, IPs).
+	// Re-read for consistent computed values (state, IPs). Get can lag the live
+	// state after asynchronous operations, so keep state from the authoritative
+	// /meta endpoint.
 	vm, err := r.svc.Get(ctx, slug)
 	if err != nil {
 		resp.Diagnostics.AddError("Failed to refresh instance after update", err.Error())
 		return
 	}
+	liveState, err := r.waitForStableInstanceState(ctx, slug)
+	if err != nil {
+		resp.Diagnostics.AddError("Failed to refresh live instance state after update", err.Error())
+		return
+	}
+	vm.State = liveState
 	r.applyVMState(&plan, vm)
 	r.fillPublicIP(ctx, &plan, vm)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
+}
+
+var instanceRenamePollInterval = 10 * time.Second
+
+// waitForStableInstanceState returns the authoritative runtime state once it
+// reaches a stable value. GET can lag a completed hostname change, so updates
+// that depend on power state use /meta instead.
+func (r *instanceResource) waitForStableInstanceState(ctx context.Context, slug string) (string, error) {
+	var stable string
+	err := pollUntilReady(ctx, instanceRenamePollInterval, func(ctx context.Context) (bool, error) {
+		meta, err := r.svc.Meta(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(meta.State) {
+		case "running", "stopped":
+			stable = meta.State
+			return true, nil
+		case "error", "failed", "destroyed", "expunging", "expunged":
+			return false, fmt.Errorf("instance entered state %q", meta.State)
+		default:
+			return false, nil
+		}
+	})
+	if err != nil {
+		return "", err
+	}
+	return stable, nil
+}
+
+// waitForHostname waits for the asynchronous name and hostname change to be
+// visible in the instance record and for the live runtime state to stabilize.
+func (r *instanceResource) waitForHostname(ctx context.Context, slug, hostname string) error {
+	return pollUntilReady(ctx, instanceRenamePollInterval, func(ctx context.Context) (bool, error) {
+		vm, err := r.svc.Get(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		if vm.Name != hostname || vm.Hostname != hostname {
+			return false, nil
+		}
+		meta, err := r.svc.Meta(ctx, slug)
+		if err != nil {
+			return false, err
+		}
+		switch strings.ToLower(meta.State) {
+		case "error", "failed", "destroyed", "expunging", "expunged":
+			return false, fmt.Errorf("instance entered state %q", meta.State)
+		}
+		switch strings.ToLower(meta.State) {
+		case "running", "stopped":
+			return true, nil
+		default:
+			return false, nil
+		}
+	})
 }
 
 // waitForRunning polls the instance until it reports Running (returning it) or a
@@ -1069,29 +1063,16 @@ func (r *instanceResource) waitForPowerState(ctx context.Context, slug, targetSt
 	})
 }
 
-// cleanupAfterFailedCreate best-effort deletes an instance that was provisioned
-// but cannot be saved to state because a later create step failed. A cleanup
-// failure is surfaced as a warning (the original error is reported by the caller)
-// so the user knows a manual delete may be needed.
-func (r *instanceResource) cleanupAfterFailedCreate(ctx context.Context, slug string, deletePublicIP bool, billingCycle string, diags *diag.Diagnostics) {
-	if err := r.svc.Cancel(ctx, slug, deletePublicIP, billingCycle); err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
-		diags.AddWarning(
-			"Orphaned instance not cleaned up",
-			fmt.Sprintf("instance %s was created but provisioning failed, and the cleanup delete also failed: %s. Delete it manually to avoid an orphan.", slug, err.Error()),
-		)
-	}
-}
-
 // resize changes the instance's compute offering. The platform requires a
 // stopped VM for this operation. The provider restores the VM to its original
 // power state after the change or after a failed change, so a failed resize does
 // not leave a previously running VM stopped.
 func (r *instanceResource) resize(ctx context.Context, slug string, plan instanceResourceModel) error {
-	vm, err := r.svc.Get(ctx, slug)
+	liveState, err := r.waitForStableInstanceState(ctx, slug)
 	if err != nil {
 		return err
 	}
-	wasRunning := isRunning(vm.State)
+	wasRunning := isRunning(liveState)
 
 	if wasRunning {
 		base := r.latestActionTime(ctx, slug)
@@ -1201,13 +1182,25 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 	defer cancel()
 
 	slug := model.ID.ValueString()
+	meta, err := r.svc.Meta(deleteCtx, slug)
+	if err != nil {
+		if apierrors.IsNotFound(err) || apierrors.IsResourceNotFound(err) {
+			return
+		}
+		resp.Diagnostics.AddError("Failed to determine instance state before deletion", err.Error())
+		return
+	}
+	if err := validateInstanceDeleteState(slug, meta.State); err != nil {
+		resp.Diagnostics.AddError("Instance cannot be deleted", err.Error())
+		return
+	}
 	// Delete through the service-cancellation workflow so the API releases the IP it
 	// auto-assigned at create (the direct DELETE endpoint ignores delete_public_ip and
 	// leaves the address Allocated/billable). Only release when this resource requested
 	// the auto-assignment (assign_public_ip defaults to true, mirroring Create). An IP
 	// attached via zcp_ip_address/zcp_ip_association is owned by those resources.
 	deletePublicIP := model.AssignPublicIP.IsNull() || model.AssignPublicIP.IsUnknown() || model.AssignPublicIP.ValueBool()
-	err := r.svc.Cancel(deleteCtx, slug, deletePublicIP, cancelBillingCycleUnit(model.BillingCycle.ValueString()))
+	err = r.svc.Cancel(deleteCtx, slug, deletePublicIP, cancelBillingCycleUnit(model.BillingCycle.ValueString()))
 	if err != nil && !apierrors.IsNotFound(err) && !apierrors.IsResourceNotFound(err) {
 		resp.Diagnostics.AddError("Failed to delete instance", err.Error())
 		return
@@ -1224,27 +1217,39 @@ func (r *instanceResource) Delete(ctx context.Context, req resource.DeleteReques
 	}
 }
 
+func validateInstanceDeleteState(slug, state string) error {
+	state = strings.TrimSpace(state)
+	if state == "" {
+		return fmt.Errorf("cannot delete instance %q because its current state is unknown; retry when the current state is available", slug)
+	}
+	if strings.EqualFold(state, "Starting") {
+		return fmt.Errorf("cannot delete instance %q while it is Starting; wait until it finishes starting, then retry", slug)
+	}
+	return nil
+}
+
 // ImportState seeds the create-only attributes the API does not return in a
 // comparable form. A post-import plan is zero-diff as long as every segment the
 // config actually sets a value for is supplied; a segment left out (empty)
 // leaves the matching attribute null, which only matches a config that also
 // omits it. Format (slash-separated, trailing/empty segments allowed):
 //
-//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>
+//	<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<blockstorage_plan>/<root_disk_size>[/<networks>]
 //
 // <slug>/<cloud_provider>/<region>/<template> are required. name, state and IPs
 // come from the subsequent Read; tags cannot be imported (the API does not
 // return them). `network_type`, `vr_plan`, `default_network`, and `networks`
 // were added after the rest of this format; an import ID written for an older
 // provider version, with fewer trailing segments, still works and simply
-// leaves those newer attributes null. `cpu`, `memory_gb`, and `disk_gb` are
-// optional for custom-plan instances. `networks` is a list and does not fit
+// leaves those newer attributes null. Legacy custom-plan fields are accepted
+// after default_network to preserve imports created by earlier versions.
+// `networks` is a list and does not fit
 // importPositional's single-value-per-segment scheme, so it is carried as an
 // optional final comma-separated segment (e.g. "net-a,net-b") and set
 // separately.
 func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportStateRequest, resp *resource.ImportStateResponse) {
 	fields := []string{"id", "cloud_provider", "region", "template", "plan", "billing_cycle", "project", "ssh_key", "network", "network_plan", "storage_category", "network_type", "vr_plan", "default_network"}
-	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>/<networks>]"
+	format := "<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<blockstorage_plan>/<root_disk_size>/<networks>]"
 	importID := req.ID
 
 	// Split fully (not SplitN) so an ID with more segments than documented is
@@ -1258,8 +1263,12 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 	}
 	var networksRaw string
 	var customPlanParts []string
+	var fixedStorageParts []string
 	if len(parts) == len(fields)+1 {
 		networksRaw = strings.TrimSpace(parts[len(fields)])
+		req.ID = strings.Join(parts[:len(fields)], "/")
+	} else if len(parts) == len(fields)+2 {
+		fixedStorageParts = parts[len(fields) : len(fields)+2]
 		req.ID = strings.Join(parts[:len(fields)], "/")
 	} else if len(parts) > len(fields)+1 {
 		if len(parts) != len(fields)+3 && len(parts) != len(fields)+4 {
@@ -1267,9 +1276,14 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 				fmt.Sprintf("expected format %q, got %q", format, req.ID))
 			return
 		}
-		customPlanParts = parts[len(fields) : len(fields)+3]
-		if len(parts) == len(fields)+4 {
-			networksRaw = strings.TrimSpace(parts[len(fields)+3])
+		if len(parts) == len(fields)+3 && !isLegacyCustomPlanImport(parts[len(fields):]) {
+			fixedStorageParts = parts[len(fields) : len(fields)+2]
+			networksRaw = strings.TrimSpace(parts[len(fields)+2])
+		} else {
+			customPlanParts = parts[len(fields) : len(fields)+3]
+			if len(parts) == len(fields)+4 {
+				networksRaw = strings.TrimSpace(parts[len(fields)+3])
+			}
 		}
 		req.ID = strings.Join(parts[:len(fields)], "/")
 	}
@@ -1285,6 +1299,9 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 		}
 		setImportedInstanceCustomPlan(ctx, resp, customPlanParts, format, importID)
 	}
+	if len(fixedStorageParts) > 0 {
+		setImportedInstanceFixedStorage(ctx, resp, fixedStorageParts, format, importID)
+	}
 	if resp.Diagnostics.HasError() || networksRaw == "" {
 		return
 	}
@@ -1298,6 +1315,32 @@ func (r *instanceResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("networks"), networksValue)...)
+}
+
+func isLegacyCustomPlanImport(values []string) bool {
+	if len(values) < 3 {
+		return false
+	}
+	for _, value := range values[:3] {
+		if _, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err != nil {
+			return false
+		}
+	}
+	return true
+}
+
+func setImportedInstanceFixedStorage(ctx context.Context, resp *resource.ImportStateResponse, values []string, format, importID string) {
+	if strings.TrimSpace(values[0]) == "" {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("blockstorage_plan must be set; expected format %q, got %q", format, importID))
+		return
+	}
+	rootDiskSize, err := strconv.ParseInt(strings.TrimSpace(values[1]), 10, 64)
+	if err != nil || rootDiskSize <= 0 {
+		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("root_disk_size must be an integer greater than zero; expected format %q, got %q", format, importID))
+		return
+	}
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("blockstorage_plan"), types.StringValue(values[0]))...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("root_disk_size"), types.Int64Value(rootDiskSize))...)
 }
 
 func setImportedInstanceCustomPlan(ctx context.Context, resp *resource.ImportStateResponse, values []string, format, importID string) {

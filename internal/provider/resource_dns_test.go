@@ -29,6 +29,16 @@ type fakeDNSService struct {
 	lastRecordReq  dns.CreateRecordRequest
 }
 
+func (f *fakeDNSService) FindBySlug(_ context.Context, slug string) (*dns.Domain, error) {
+	if f.showErr != nil {
+		return nil, f.showErr
+	}
+	if f.domain == nil || f.domain.Slug != slug {
+		return nil, nil
+	}
+	return f.domain, nil
+}
+
 func (f *fakeDNSService) Show(_ context.Context, _ string) (*dns.Domain, error) {
 	if f.showErr != nil {
 		return nil, f.showErr

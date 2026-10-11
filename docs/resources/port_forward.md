@@ -21,19 +21,21 @@ resource "zcp_network" "prod" {
   name           = "prod-network"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  network_plan   = "inet-yow"
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
 resource "zcp_instance" "web" {
-  name             = "web-01"
-  template         = "ubuntu-2604-lts-1"
-  plan             = "ca2sl"
-  billing_cycle    = "hourly"
-  network          = zcp_network.prod.id
-  storage_category = "nvme"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
+  name              = "web-01"
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network           = zcp_network.prod.id
+  storage_category  = "nvme"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
 }
 
 resource "zcp_ip_address" "web" {

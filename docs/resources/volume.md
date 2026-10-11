@@ -6,9 +6,9 @@ description: |-
 
 # zcp_volume
 
-Manages a ZCP block storage volume. Provide **exactly one** of `plan` (a fixed
-offering) or `size` (a custom size in GB). Setting both, or neither, is a
-plan-time error.
+Manages a ZCP block storage volume. Provide `plan`, `size`, or both. A plan
+selects the storage tier. A size selects capacity in GB. At least one is
+required.
 
 Set `vm` to attach the volume to an instance on creation. Changing `vm` later
 attaches or detaches the volume in place. Clearing it detaches. On destroy, the
@@ -22,11 +22,10 @@ Only `vm` is updatable in place.
 API on creation but are not all returned in a comparable form by the list
 response. They are preserved in Terraform state.
 
-~> **Plan vs. size:** at the time of writing, plan-based creation returns a
-server-side error on the public platform
-(`Undefined property: stdClass::$storage`), so prefer `size` until that is
-resolved. The `size` attribute is `Optional`+`Computed`: set it for a
-custom-size volume, or omit it (with `plan`) to have it computed from the plan.
+~> **Plan and size:** set both to select capacity in a named storage tier. Set
+only `plan` when the tier provides capacity, or set only `size` for a
+custom-size volume. Use an explicit size for capacity-based tiers. The `size`
+attribute is `Optional`+`Computed`.
 
 ## Example Usage
 
@@ -35,13 +34,14 @@ data "zcp_region" "yow" {
   slug = "yow-1"
 }
 
-# Size-based volume (recommended while plan-based creation is broken server-side).
+# Named storage tier with explicit capacity.
 resource "zcp_volume" "data" {
   name             = "data-vol"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
   billing_cycle    = "hourly"
   storage_category = "nvme"
+  plan             = "b1g1"
   size             = 20
 }
 
@@ -64,9 +64,9 @@ terraform import zcp_volume.data '<slug>/<cloud_provider>/<region>/<billing_cycl
 ```
 
 `<slug>/<cloud_provider>/<region>/<billing_cycle>/<storage_category>` are
-required. `size` cannot be imported via the ID (it is numeric). Set it in
-configuration for size-based volumes. `name` and `slug` come from the subsequent
-read.
+required. `size` cannot be imported via the ID because it is numeric. For a tier
+and capacity, include `plan` in the import ID and set `size` in configuration.
+`name` and `slug` come from the subsequent read.
 
 ## Schema
 
@@ -85,10 +85,11 @@ read.
 
 ### Optional
 
-- `plan` (String) Plan slug (e.g. `b1g1`). Mutually exclusive with `size`.
-  Changing this forces replacement.
-- `size` (Number) Custom storage size in GB. Mutually exclusive with `plan`.
-  Changing this forces replacement.
+- `plan` (String) Plan slug (e.g. `b1g1`). Set `size` with a plan to select
+  capacity. Changing this forces replacement.
+- `size` (Number) Storage capacity in GB. Set this with a plan to select
+  capacity, or without a plan for a custom-size volume. Changing this forces
+  replacement.
 - `project` (String) Project slug. Inherits from the provider `default_project`
   if omitted. Changing this forces replacement.
 - `vm` (String) Virtual machine slug to attach the volume to. Set, change, or

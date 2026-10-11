@@ -22,21 +22,23 @@ resource "zcp_network" "app" {
   name           = "app-net"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  network_plan   = "inet-yow"
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
 resource "zcp_instance" "web" {
-  name             = "web-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network          = zcp_network.app.id
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.deploy.name
-  assign_public_ip = true # set false for a private-only instance
+  name              = "web-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network           = zcp_network.app.id
+  storage_category  = "nvme"
+  ssh_key           = zcp_ssh_key.deploy.name
+  assign_public_ip  = true # set false for a private-only instance
 }
 
 # ── Convenience: auto-create a network with network_plan ──────────────────────
@@ -45,15 +47,17 @@ resource "zcp_instance" "web" {
 # prefer the `network` attribute above. tags are optional; power state is not
 # managed by Terraform (the running/stopped status is read-only in `state`).
 resource "zcp_instance" "app" {
-  name             = "app-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1m"
-  billing_cycle    = "hourly"
-  network_plan     = "pnet-yow"
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.deploy.name
+  name              = "app-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network_plan      = "pnet-yow"
+  storage_category  = "nvme"
+  ssh_key           = zcp_ssh_key.deploy.name
 
   user_data = <<-EOT
     #cloud-config
@@ -79,16 +83,18 @@ resource "zcp_instance" "app" {
 # value to state and never plans a replacement for an instance created before
 # this attribute existed.
 resource "zcp_instance" "vpc" {
-  name             = "vpc-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network_type     = "Vpc"
-  vr_plan          = "vr-basic"
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.deploy.name
+  name              = "vpc-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network_type      = "Vpc"
+  vr_plan           = "vr-basic"
+  storage_category  = "nvme"
+  ssh_key           = zcp_ssh_key.deploy.name
 }
 
 # ── Multiple existing networks with a default ──────────────────────────────────
@@ -98,21 +104,23 @@ resource "zcp_network" "app_secondary" {
   name           = "app-net-2"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  network_plan   = "inet-yow"
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
 resource "zcp_instance" "multi_net" {
-  name             = "multi-net-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  networks         = [zcp_network.app.id, zcp_network.app_secondary.id]
-  default_network  = zcp_network.app.id
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.deploy.name
+  name              = "multi-net-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  networks          = [zcp_network.app.id, zcp_network.app_secondary.id]
+  default_network   = zcp_network.app.id
+  storage_category  = "nvme"
+  ssh_key           = zcp_ssh_key.deploy.name
 }
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
@@ -131,5 +139,5 @@ output "web_public_ip" {
 # `networks` does not fit a single segment, so it is a trailing comma-separated
 # segment of its own:
 # terraform import zcp_instance.web \
-#   '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]'
-#   e.g. terraform import zcp_instance.web 'web-01-abc/nimbo/yow-1/ubuntu-2404-lts'
+#   '<slug>/<cloud_provider>/<region>/<template>/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<blockstorage_plan>/<root_disk_size>[/<networks>]'
+#   e.g. terraform import zcp_instance.web 'web-01-abc/nimbo/yow-1/ubuntu-2204-lts/ca1hcs/hourly//deploy-key/app-net//nvme////b1g1/100'

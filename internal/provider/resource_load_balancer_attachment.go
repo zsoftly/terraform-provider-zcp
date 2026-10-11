@@ -224,7 +224,7 @@ func isLoadBalancerAttachmentAbsent(err error) bool {
 	}
 	var apiErr *apierrors.APIError
 	return errors.As(err, &apiErr) &&
-		apiErr.StatusCode == 403 &&
+		(apiErr.StatusCode == 403 || apiErr.StatusCode == 500) &&
 		apiErr.Message == loadBalancerAttachmentAbsentMessage
 }
 

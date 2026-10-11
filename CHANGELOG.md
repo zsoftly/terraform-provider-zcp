@@ -5,6 +5,62 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [v1.0.0] - 2026-10-11
+
+### Changed
+
+- The provider now builds against zcp-cli v1.0.1. Kubernetes clusters use fixed
+  control-plane, worker, and root-volume plans with an explicit root disk size.
+  These shape fields force replacement because the API exposes no role-specific
+  plan update operation. The provider still reads and destroys state from the
+  earlier single-plan model.
+- Kubernetes autoscaling manages requested minimum and maximum workers. The
+  platform decides whether to scale out, so Terraform confirms accepted bounds
+  rather than a future worker count. Autoscaling can leave billing and observed
+  workers in flux; Terraform does not promise immediate scale-out or a final
+  bill.
+- The provider uses the service-cancellation workflow during Kubernetes destroy
+  and waits for the cluster to disappear. Kubeconfig and cluster credentials are
+  not stored.
+- DNS domain reads use the SDK's paginated slug lookup. `data.zcp_plan` exposes
+  the decoded plan `tag`.
+- New instances require a named compute plan, `blockstorage_plan`, and
+  `root_disk_size`. The provider rejects custom CPU, memory, and disk inputs;
+  legacy custom-plan state remains readable and destroyable.
+
+### Upgrade notes
+
+- Review the upgrade plan before applying. Existing state is preserved, but a
+  new or replacement instance needs `plan`, `blockstorage_plan`, and
+  `root_disk_size`.
+- Existing Kubernetes clusters retain the legacy `plan` state. A replacement
+  cluster uses `control_plane_plan`, `worker_plan`, `storage_plan`, and
+  `root_disk_size`.
+
+### Added
+
+- `zcp_vm_backup_schedule` manages VM backup scheduler policies, including
+  timing, timezone, retention, paused state, import, and scope checks.
+
+### Fixed
+
+- Load-balancer attachment destroy now also treats the exact already-detached
+  response as successful when the API incorrectly reports it with HTTP 500.
+  Other server errors still return a diagnostic.
+- Instance name updates now use the hostname-change operation. The provider
+  waits for the asynchronous change before later updates; changing the name can
+  restart a running instance or start a stopped instance.
+- `zcp_volume` accepts a storage `plan` with `size` to select capacity.
+
+### Known limitations
+
+- Automatic Kubernetes scale-out is unverified. Terraform records accepted
+  autoscaling bounds and does not promise an immediate worker increase or stable
+  root-volume subscriptions.
+- Cluster cancellation can leave a network that requires separate deletion.
+- `zcp_vm_backup_schedule` rejects `everyOtherDay` before writing because the
+  platform can persist that interval and then report an error.
+
 ## [v0.3.0] - 2026-10-09
 
 ### Added
@@ -199,7 +255,7 @@ to [Semantic Versioning](https://semver.org/).
   (0-65535). Put the mail server in `content` and the preference number in
   `priority`. Priority is required for `MX` and rejected for every other type,
   both checked at plan time. The previous SDK never sent priority, so `MX`
-  records failed with an API error. Verified against the live platform.
+  records failed with an API error.
 
 ### Changed
 
@@ -223,8 +279,7 @@ to [Semantic Versioning](https://semver.org/).
   frees the IP as part of the deletion, so destroy no longer leaves a billable
   address. A public IP bound through `zcp_ip_address`/`zcp_ip_association` is
   left to its own resource. Set `assign_public_ip = false` to create the
-  instance without an auto-assigned public IP. Verified end to end with
-  Terraform and OpenTofu.
+  instance without an auto-assigned public IP.
 - `zcp_load_balancer` destroy now deletes the load balancer through the
   service-cancellation workflow the CMP Web UI runs, instead of the direct
   delete endpoint, which could return success without removing the balancer.
@@ -240,8 +295,7 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [v0.1.0] - 2026-07-07
 
-Initial release. Built on the zcp-cli SDK v0.0.23 and verified against the live
-ZCP platform.
+Initial release. Built on the zcp-cli SDK v0.0.23.
 
 ### Added
 
