@@ -187,6 +187,61 @@ func TestVMBackupScheduleResourceCRUDPayload(t *testing.T) {
 	}
 }
 
+func TestVMBackupScheduleResourceUpdateChangesStatusOnlyWhenPausedIsKnown(t *testing.T) {
+	day := 2
+	for _, tc := range []struct {
+		name        string
+		status      string
+		paused      tftypes.Value
+		wantPaused  bool
+		wantResumed bool
+		finalPaused bool
+	}{
+		{name: "null leaves paused policy paused", status: "paused", paused: tftypes.NewValue(tftypes.Bool, nil), finalPaused: true},
+		{name: "unknown leaves active policy active", status: "active", paused: tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue)},
+		{name: "unknown leaves paused policy paused", status: "paused", paused: tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue), finalPaused: true},
+		{name: "known true pauses active policy", status: "active", paused: tftypes.NewValue(tftypes.Bool, true), wantPaused: true, finalPaused: true},
+		{name: "known true leaves paused policy paused", status: "paused", paused: tftypes.NewValue(tftypes.Bool, true), finalPaused: true},
+		{name: "known false resumes paused policy", status: "paused", paused: tftypes.NewValue(tftypes.Bool, false), wantResumed: true},
+		{name: "known false leaves active policy active", status: "active", paused: tftypes.NewValue(tftypes.Bool, false)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeVMBackupScheduleService{policy: scheduler.Policy{ID: "policy-1", Action: "VM Backup", Actionable: &scheduler.VMRef{Slug: "vm-1"}, Region: &scheduler.ScopeRef{Slug: "yow-1"}, Interval: "weeklyOn", Day: &day, At: "02:00", Timezone: "America/Toronto", RetentionPolicy: 3, Status: tc.status}}
+			r := internalprovider.NewVMBackupScheduleResourceWithService(svc, &fakeVMBackupScheduleInstances{})
+			state := vmBackupScheduleConfig("policy-1", tc.status == "paused")
+			plan := vmBackupScheduleConfig("policy-1", false)
+			plan["paused"] = tc.paused
+			resp := runUpdate(t, r, plan, state)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("update diagnostics: %v", resp.Diagnostics)
+			}
+			if svc.paused != tc.wantPaused || svc.resumed != tc.wantResumed {
+				t.Errorf("paused=%t resumed=%t, want paused=%t resumed=%t", svc.paused, svc.resumed, tc.wantPaused, tc.wantResumed)
+			}
+			var paused bool
+			if diags := resp.State.GetAttribute(context.Background(), path.Root("paused"), &paused); diags.HasError() {
+				t.Fatalf("paused state: %v", diags)
+			}
+			if paused != tc.finalPaused {
+				t.Errorf("paused state=%t, want %t", paused, tc.finalPaused)
+			}
+		})
+	}
+}
+
+func TestVMBackupScheduleResourceAcceptsBackupActionNames(t *testing.T) {
+	day := 2
+	for _, action := range []string{"Virtual Machine Backup", "vM bAcKuP", "unrelated action"} {
+		t.Run(action, func(t *testing.T) {
+			svc := &fakeVMBackupScheduleService{policy: scheduler.Policy{ID: "policy-1", Action: action, Actionable: &scheduler.VMRef{Slug: "vm-1"}, Region: &scheduler.ScopeRef{Slug: "yow-1"}, Interval: "weeklyOn", Day: &day, At: "02:00", Timezone: "America/Toronto", RetentionPolicy: 3, Status: "active"}}
+			resp := runRead(t, internalprovider.NewVMBackupScheduleResourceWithService(svc, nil), vmBackupScheduleConfig("policy-1", false))
+			if gotError := resp.Diagnostics.HasError(); gotError != (action == "unrelated action") {
+				t.Errorf("diagnostics error = %t for action %q", gotError, action)
+			}
+		})
+	}
+}
+
 func TestVMBackupScheduleResourceCreateDoesNotWriteWhenVMPreflightFails(t *testing.T) {
 	day := 2
 	policy := scheduler.Policy{ID: "policy-1", Action: "Virtual Machine Backup", Actionable: &scheduler.VMRef{Slug: "vm-1"}, Region: &scheduler.ScopeRef{Slug: "yow-1"}, Interval: "weeklyOn", Day: &day, At: "02:00", Timezone: "America/Toronto", RetentionPolicy: 3}

@@ -299,8 +299,11 @@ func (r *vmBackupScheduleResource) Update(ctx context.Context, req resource.Upda
 		resp.Diagnostics.AddError("VM backup schedule is outside configured scope", err.Error())
 		return
 	}
-	wantPaused := !plan.Paused.IsNull() && plan.Paused.ValueBool()
 	isPaused := strings.EqualFold(p.Status, "paused")
+	wantPaused := isPaused
+	if !plan.Paused.IsNull() && !plan.Paused.IsUnknown() {
+		wantPaused = plan.Paused.ValueBool()
+	}
 	if wantPaused != isPaused {
 		if wantPaused {
 			p, err = r.svc.Pause(ctx, p.ID)
@@ -382,7 +385,7 @@ func (r *vmBackupScheduleResource) ensureScope(m *vmBackupScheduleModel, p *sche
 	if p.ID == "" {
 		return fmt.Errorf("scheduler response did not include a policy ID")
 	}
-	if !strings.EqualFold(p.Action, "Virtual Machine Backup") {
+	if !strings.EqualFold(p.Action, "Virtual Machine Backup") && !strings.EqualFold(p.Action, "VM Backup") {
 		return fmt.Errorf("scheduler policy %q has action %q, expected Virtual Machine Backup", p.ID, p.Action)
 	}
 	if p.Actionable == nil || p.Actionable.Slug == "" {

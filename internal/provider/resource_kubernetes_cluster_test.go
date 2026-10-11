@@ -4,12 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
+	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -356,6 +360,129 @@ func TestKubernetesResource_updateUpgradesVersionAndPlanInPlace(t *testing.T) {
 	// No worker change → no scaling.
 	if len(svc.scaledTo) != 0 {
 		t.Errorf("Scale should not be called, got %v", svc.scaledTo)
+	}
+}
+
+func TestKubernetesResourceLegacyPlanUsesStateForUnknown(t *testing.T) {
+	r := internalprovider.NewKubernetesClusterResource()
+	var schResp resource.SchemaResponse
+	r.Schema(context.Background(), resource.SchemaRequest{}, &schResp)
+	attribute := schResp.Schema.Attributes["plan"].(schema.StringAttribute)
+	_, stateRaw := rawFor(t, r, map[string]tftypes.Value{"plan": tftypes.NewValue(tftypes.String, "legacy-plan")})
+	_, planRaw := rawFor(t, r, map[string]tftypes.Value{"plan": tftypes.NewValue(tftypes.String, tftypes.UnknownValue)})
+	req := planmodifier.StringRequest{
+		Path:        path.Root("plan"),
+		State:       tfsdk.State{Schema: schResp.Schema, Raw: stateRaw},
+		Plan:        tfsdk.Plan{Schema: schResp.Schema, Raw: planRaw},
+		ConfigValue: types.StringNull(),
+		StateValue:  types.StringValue("legacy-plan"),
+		PlanValue:   types.StringUnknown(),
+	}
+	resp := planmodifier.StringResponse{PlanValue: req.PlanValue}
+	for _, modifier := range attribute.PlanModifiers {
+		modifier.PlanModifyString(context.Background(), req, &resp)
+	}
+	if got := resp.PlanValue.ValueString(); got != "legacy-plan" {
+		t.Errorf("legacy plan = %q, want legacy-plan", got)
+	}
+}
+
+func TestKubernetesResourceUpdateSkipsUnavailableLegacyPlan(t *testing.T) {
+	restore := internalprovider.SetKubernetesPollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	for _, tc := range []struct {
+		name        string
+		plan        tftypes.Value
+		wantUpgrade []string
+	}{
+		{name: "null", plan: tftypes.NewValue(tftypes.String, nil)},
+		{name: "unknown", plan: tftypes.NewValue(tftypes.String, tftypes.UnknownValue)},
+		{name: "known", plan: tftypes.NewValue(tftypes.String, "new-legacy-plan"), wantUpgrade: []string{"new-legacy-plan"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeKubernetesService{getQueue: []*kubernetes.Cluster{{Slug: "k8s1-abc", State: "Running", NodeSize: 3}}}
+			r := internalprovider.NewKubernetesClusterResourceWithService(svc)
+			schResp := kubernetesSchema(t)
+			stateValues := kubernetesValues(t, "k8s1-abc", 3)
+			stateValues["plan"] = tftypes.NewValue(tftypes.String, "legacy-plan")
+			planValues := kubernetesValues(t, "k8s1-abc", 3)
+			planValues["plan"] = tc.plan
+			state := tftypes.NewValue(kubernetesTFType(t), stateValues)
+			resp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: state}}
+			r.Update(context.Background(), resource.UpdateRequest{
+				Plan:  tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(kubernetesTFType(t), planValues)},
+				State: tfsdk.State{Schema: schResp.Schema, Raw: state},
+			}, resp)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("unexpected error: %v", resp.Diagnostics)
+			}
+			if got := svc.planUpgrades; !slices.Equal(got, tc.wantUpgrade) {
+				t.Errorf("plan upgrades = %v, want %v", got, tc.wantUpgrade)
+			}
+		})
+	}
+}
+
+func TestKubernetesResourceUpdateUpgradesVersionWhenLegacyPlanIsUnknown(t *testing.T) {
+	restore := internalprovider.SetKubernetesPollIntervalForTest(time.Millisecond)
+	defer restore()
+
+	svc := &fakeKubernetesService{
+		getQueue: []*kubernetes.Cluster{
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.36.1", RegionID: "region-yow", NodeSize: 3},
+			{Slug: "k8s1-abc", State: "Running", Version: "v1.37.0", RegionID: "region-yow", NodeSize: 3},
+		},
+		versions: []kubernetes.KubernetesVersion{{Slug: "v1370-yow", Version: "v1.37.0", RegionID: "region-yow"}},
+	}
+	r := internalprovider.NewKubernetesClusterResourceWithService(svc)
+	schResp := kubernetesSchema(t)
+	stateValues := kubernetesValues(t, "k8s1-abc", 3)
+	stateValues["plan"] = tftypes.NewValue(tftypes.String, "legacy-plan")
+	planValues := kubernetesValues(t, "k8s1-abc", 3)
+	planValues["version"] = tftypes.NewValue(tftypes.String, "v1.37.0")
+	planValues["plan"] = tftypes.NewValue(tftypes.String, tftypes.UnknownValue)
+	state := tftypes.NewValue(kubernetesTFType(t), stateValues)
+	resp := &resource.UpdateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: state}}
+	r.Update(context.Background(), resource.UpdateRequest{
+		Plan:  tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(kubernetesTFType(t), planValues)},
+		State: tfsdk.State{Schema: schResp.Schema, Raw: state},
+	}, resp)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	if got := svc.versionUpgrades; !slices.Equal(got, []string{"v1370-yow"}) {
+		t.Errorf("version upgrades = %v, want [v1370-yow]", got)
+	}
+	if len(svc.planUpgrades) != 0 {
+		t.Errorf("plan upgrades = %v, want none", svc.planUpgrades)
+	}
+}
+
+func TestKubernetesResourceCreateValidatesPlanFields(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		field string
+		want  string
+	}{
+		{name: "control plane", field: "control_plane_plan", want: "control_plane_plan must name a control-plane plan"},
+		{name: "worker", field: "worker_plan", want: "worker_plan must name a worker plan"},
+		{name: "storage", field: "storage_plan", want: "storage_plan must name a storage tier; custom_plan is not supported"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			values := kubernetesValues(t, "", 3)
+			values[tc.field] = tftypes.NewValue(tftypes.String, "")
+			r := internalprovider.NewKubernetesClusterResourceWithService(&fakeKubernetesService{})
+			schResp := kubernetesSchema(t)
+			resp := &resource.CreateResponse{State: tfsdk.State{Schema: schResp.Schema, Raw: tftypes.NewValue(kubernetesTFType(t), nil)}}
+			r.Create(context.Background(), resource.CreateRequest{Plan: tfsdk.Plan{Schema: schResp.Schema, Raw: tftypes.NewValue(kubernetesTFType(t), values)}}, resp)
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("expected validation diagnostic")
+			}
+			if got := resp.Diagnostics.Errors()[0].Detail(); !strings.Contains(got, tc.want) {
+				t.Errorf("diagnostic = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }
 

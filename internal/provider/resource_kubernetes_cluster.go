@@ -158,6 +158,7 @@ func (r *kubernetesClusterResource) Schema(ctx context.Context, _ resource.Schem
 				Optional:            true,
 				Computed:            true,
 				MarkdownDescription: "Legacy single-plan field retained for state created by earlier provider releases. New clusters use `control_plane_plan` and `worker_plan`.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"control_plane_plan": schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Fixed control-plane node plan slug. Required for a new cluster. Changing this forces replacement.", PlanModifiers: requiresReplace},
 			"worker_plan":        schema.StringAttribute{Optional: true, Computed: true, MarkdownDescription: "Fixed worker node plan slug. Required for a new cluster. Changing this forces replacement.", PlanModifiers: requiresReplace},
@@ -401,7 +402,13 @@ func validateKubernetesCreate(model *kubernetesClusterResourceModel) error {
 	if model.ControlPlanePlan.IsNull() || model.ControlPlanePlan.IsUnknown() || model.WorkerPlan.IsNull() || model.WorkerPlan.IsUnknown() || model.StoragePlan.IsNull() || model.StoragePlan.IsUnknown() || model.RootDiskSize.IsNull() || model.RootDiskSize.IsUnknown() {
 		return fmt.Errorf("fixed plans and root_disk_size must be known before creating a Kubernetes cluster")
 	}
-	if model.ControlPlanePlan.ValueString() == "" || model.WorkerPlan.ValueString() == "" || model.StoragePlan.ValueString() == "" || model.StoragePlan.ValueString() == "custom_plan" {
+	if model.ControlPlanePlan.ValueString() == "" {
+		return fmt.Errorf("control_plane_plan must name a control-plane plan before creating a Kubernetes cluster")
+	}
+	if model.WorkerPlan.ValueString() == "" {
+		return fmt.Errorf("worker_plan must name a worker plan before creating a Kubernetes cluster")
+	}
+	if model.StoragePlan.ValueString() == "" || model.StoragePlan.ValueString() == "custom_plan" {
 		return fmt.Errorf("storage_plan must name a storage tier; custom_plan is not supported")
 	}
 	if model.HA.ValueBool() && model.ControlNodes.ValueInt64() < 2 {
@@ -923,7 +930,7 @@ func (r *kubernetesClusterResource) Update(ctx context.Context, req resource.Upd
 		ready = upgraded
 	}
 
-	if model.Plan.ValueString() != state.Plan.ValueString() {
+	if !model.Plan.IsNull() && !model.Plan.IsUnknown() && model.Plan.ValueString() != state.Plan.ValueString() {
 		if err := r.svc.Upgrade(ctx, slug, kubernetes.UpgradeRequest{
 			Plan:         model.Plan.ValueString(),
 			Slug:         slug,
