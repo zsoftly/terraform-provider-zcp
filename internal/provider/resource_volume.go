@@ -226,8 +226,9 @@ func (r *volumeResource) Create(ctx context.Context, req resource.CreateRequest,
 		VirtualMachine:  model.VM.ValueString(),
 	}
 	// size is Optional+Computed. The plan can therefore carry a prior state
-	// value when a replacement omits size. Only an explicitly configured size
-	// belongs in the create request.
+	// value when a replacement omits size. Configuration determines whether size
+	// was supplied, including unknown expressions. The resolved plan supplies
+	// the capacity sent in the create request.
 	if !config.Size.IsNull() && !model.Size.IsNull() && !model.Size.IsUnknown() {
 		createReq.IsCustomPlan = true
 		createReq.CustomPlan = &volume.CustomPlanStorage{Storage: int(model.Size.ValueInt64())}

@@ -2,6 +2,7 @@ package provider_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework-timeouts/resource/timeouts"
@@ -243,17 +244,20 @@ func TestVolumeResource_validateConfigBothSet(t *testing.T) {
 	}
 }
 
-func TestVolumeResource_validateConfigZeroSize(t *testing.T) {
-	r := internalprovider.NewVolumeResource().(resource.ResourceWithValidateConfig)
-	schResp := volumeSchema(t)
-	tfType := volumeTFType(t)
-	size := int64(0)
-	cfgVal := tftypes.NewValue(tfType, volumeValues(t, "", "b1g1", &size, ""))
-	req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfgVal}}
-	var resp resource.ValidateConfigResponse
-	r.ValidateConfig(context.Background(), req, &resp)
-	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected error when size is zero")
+func TestVolumeResource_validateConfigNonPositiveSize(t *testing.T) {
+	for _, size := range []int64{0, -1} {
+		t.Run(fmt.Sprintf("size_%d", size), func(t *testing.T) {
+			r := internalprovider.NewVolumeResource().(resource.ResourceWithValidateConfig)
+			schResp := volumeSchema(t)
+			tfType := volumeTFType(t)
+			cfgVal := tftypes.NewValue(tfType, volumeValues(t, "", "b1g1", &size, ""))
+			req := resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: schResp.Schema, Raw: cfgVal}}
+			var resp resource.ValidateConfigResponse
+			r.ValidateConfig(context.Background(), req, &resp)
+			if !resp.Diagnostics.HasError() {
+				t.Fatalf("expected error when size is %d", size)
+			}
+		})
 	}
 }
 
