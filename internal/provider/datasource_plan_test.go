@@ -36,6 +36,7 @@ type planStateModel struct {
 	StorageGB    types.Int64   `tfsdk:"storage_gb"`
 	HourlyPrice  types.Float64 `tfsdk:"hourly_price"`
 	MonthlyPrice types.Float64 `tfsdk:"monthly_price"`
+	Tag          types.String  `tfsdk:"tag"`
 }
 
 func testPlan(slug string) plan.Plan {
@@ -85,6 +86,7 @@ func readPlanDS(t *testing.T, lister *fakePlanLister, slug, service string) data
 		"storage_gb":    tftypes.NewValue(tftypes.Number, nil),
 		"hourly_price":  tftypes.NewValue(tftypes.Number, nil),
 		"monthly_price": tftypes.NewValue(tftypes.Number, nil),
+		"tag":           tftypes.NewValue(tftypes.String, nil),
 	})
 
 	readReq := datasource.ReadRequest{
@@ -95,6 +97,22 @@ func readPlanDS(t *testing.T, lister *fakePlanLister, slug, service string) data
 	}
 	ds.Read(context.Background(), readReq, readResp)
 	return *readResp
+}
+
+func TestPlanDataSource_tag(t *testing.T) {
+	p := testPlan("ci1xs")
+	p.Tag = json.RawMessage(`{"tag":"general"}`)
+	resp := readPlanDS(t, &fakePlanLister{plans: []plan.Plan{p}}, "ci1xs", "")
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	var got planStateModel
+	if diags := resp.State.Get(context.Background(), &got); diags.HasError() {
+		t.Fatalf("reading state: %v", diags)
+	}
+	if got.Tag.ValueString() != "general" {
+		t.Errorf("tag = %q, want general", got.Tag.ValueString())
+	}
 }
 
 func TestPlanDataSource_found(t *testing.T) {

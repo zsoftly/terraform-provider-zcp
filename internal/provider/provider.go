@@ -152,6 +152,7 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewObjectStorageBucketCORSResource,
 		NewVMSnapshotResource,
 		NewVMBackupResource,
+		NewVMBackupScheduleResource,
 		NewVolumeSnapshotResource,
 		NewVolumeBackupResource,
 		NewAutoscaleGroupResource,

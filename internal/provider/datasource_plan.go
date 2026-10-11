@@ -31,6 +31,7 @@ type planDataSourceModel struct {
 	StorageGB    types.Int64   `tfsdk:"storage_gb"`
 	HourlyPrice  types.Float64 `tfsdk:"hourly_price"`
 	MonthlyPrice types.Float64 `tfsdk:"monthly_price"`
+	Tag          types.String  `tfsdk:"tag"`
 }
 
 func NewPlanDataSource() datasource.DataSource {
@@ -82,6 +83,7 @@ func (d *planDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 				MarkdownDescription: "Monthly price in account currency.",
 				Computed:            true,
 			},
+			"tag": schema.StringAttribute{MarkdownDescription: "Plan tag.", Computed: true},
 		},
 	}
 }
@@ -151,6 +153,7 @@ func (d *planDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 			state.StorageGB = types.Int64Value(int64(storF))
 			state.HourlyPrice = types.Float64Value(p.HourlyPrice)
 			state.MonthlyPrice = types.Float64Value(p.MonthlyPrice)
+			state.Tag = types.StringValue(p.ParsedTag())
 			resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 			return
 		}

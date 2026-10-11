@@ -22,3 +22,15 @@ func requiresReplaceUnlessAdopting() planmodifier.String {
 		"Replaced when the prior value is known; adopted in place right after import.",
 	)
 }
+
+// requiresReplaceIfConfigured only replaces a computed optional value when the
+// configuration explicitly supplies a different known value.
+func requiresReplaceIfConfigured() planmodifier.String {
+	return stringplanmodifier.RequiresReplaceIf(
+		func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+			resp.RequiresReplace = !req.ConfigValue.IsNull() && !req.ConfigValue.IsUnknown() && !req.StateValue.IsNull() && req.ConfigValue.ValueString() != req.StateValue.ValueString()
+		},
+		"Replaced when configured with a different value.",
+		"Replaced when configured with a different value.",
+	)
+}

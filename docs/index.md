@@ -19,7 +19,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "registry.opentofu.org/zsoftly/zcp"
-      version = "~> 0.3.0"
+      version = "~> 1.0.0"
     }
   }
 }
@@ -37,7 +37,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "registry.terraform.io/zsoftly/zcp"
-      version = "~> 0.3.0"
+      version = "~> 1.0.0"
     }
   }
 }
@@ -49,6 +49,9 @@ provider "zcp" {
 ```
 
 ## Local Development
+
+The examples use provider v1.0.0, which includes separate Kubernetes node and
+storage plans, VM backup schedules, and plan tags.
 
 During development, use `dev_overrides` instead of a registry install. A single
 binary works for both CLIs via config.

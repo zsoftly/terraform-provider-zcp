@@ -5,6 +5,50 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [v1.0.0] - 2026-10-11
+
+### Changed
+
+- The provider now builds against zcp-cli v1.0.0. Kubernetes clusters use fixed
+  control-plane, worker, and root-volume plans with an explicit root disk size.
+  These shape fields force replacement because the API exposes no role-specific
+  plan update operation. The provider still reads and destroys state from the
+  earlier single-plan model.
+- Kubernetes autoscaling manages requested minimum and maximum workers. The
+  platform decides whether to scale out, so apply confirms bounds rather than a
+  future worker count. Autoscaling can leave billing and observed workers in
+  flux; Terraform does not promise immediate scale-out or a final bill.
+- Kubernetes destroy uses the service-cancellation workflow and waits for the
+  cluster to disappear. Kubeconfig and cluster credentials are not stored.
+- DNS domain reads use the SDK's paginated slug lookup. `data.zcp_plan` exposes
+  the decoded plan `tag`.
+- New instances require a named compute plan, `blockstorage_plan`, and
+  `root_disk_size`. The provider rejects custom CPU, memory, and disk inputs;
+  legacy custom-plan state remains readable and destroyable.
+
+### Upgrade notes
+
+- Review the upgrade plan before applying. Existing state is preserved, but a
+  new or replacement instance needs `plan`, `blockstorage_plan`, and
+  `root_disk_size`.
+- Existing Kubernetes clusters retain the legacy `plan` state. A replacement
+  cluster uses `control_plane_plan`, `worker_plan`, `storage_plan`, and
+  `root_disk_size`.
+
+### Added
+
+- `zcp_vm_backup_schedule` manages VM backup scheduler policies, including
+  timing, timezone, retention, paused state, import, and scope checks.
+
+### Known limitations
+
+- Staging testing did not demonstrate successful automatic scale-out. Scale and
+  autoscale calls recreated root-volume subscriptions.
+- Staging cluster cancellation left an empty network and an active subscription
+  associated with it. Separate network deletion was required to finish cleanup.
+- `zcp_vm_backup_schedule` rejects `everyOtherDay` before writing because the
+  platform persists that interval and then reports an error.
+
 ## [v0.3.0] - 2026-10-09
 
 ### Added

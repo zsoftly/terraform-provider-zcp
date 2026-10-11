@@ -10,34 +10,39 @@ resource "zcp_ssh_key" "k8s" {
 }
 
 # ── Managed Kubernetes cluster ────────────────────────────────────────────────
-# Create blocks until the cluster reaches the Running state. Changing `workers`
-# scales the cluster in place (it is NOT a replacement); changing `version` or
-# `region` forces a new cluster.
+# Create blocks until the cluster reaches the Running state. The separate fixed
+# plans and root volume define the cluster shape and force replacement if changed.
 resource "zcp_kubernetes_cluster" "main" {
-  name             = "main-cluster"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  version          = "v1.36.1"
-  plan             = "k8s-li-yow-1"
-  billing_cycle    = "hourly"
-  workers          = 3
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.k8s.name
+  name               = "main-cluster"
+  cloud_provider     = data.zcp_region.yow.cloud_provider
+  region             = data.zcp_region.yow.slug
+  version            = "v1.36.4"
+  control_plane_plan = "k8s-cpi-yow-1"
+  worker_plan        = "k8s-li-yow-1"
+  storage_plan       = "b1g1"
+  root_disk_size     = 100
+  billing_cycle      = "hourly"
+  workers            = 3
+  storage_category   = "nvme"
+  ssh_key            = zcp_ssh_key.k8s.name
 }
 
 # ── High-availability cluster ─────────────────────────────────────────────────
 resource "zcp_kubernetes_cluster" "ha" {
-  name             = "ha-cluster"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  version          = "v1.36.1"
-  plan             = "k8s-li-yow-1"
-  billing_cycle    = "hourly"
-  workers          = 3
-  control_nodes    = 3
-  ha               = true
-  storage_category = "nvme"
-  ssh_key          = zcp_ssh_key.k8s.name
+  name               = "ha-cluster"
+  cloud_provider     = data.zcp_region.yow.cloud_provider
+  region             = data.zcp_region.yow.slug
+  version            = "v1.36.4"
+  control_plane_plan = "k8s-cpi-yow-1"
+  worker_plan        = "k8s-li-yow-1"
+  storage_plan       = "b1g1"
+  root_disk_size     = 100
+  billing_cycle      = "hourly"
+  workers            = 3
+  control_nodes      = 3
+  ha                 = true
+  storage_category   = "nvme"
+  ssh_key            = zcp_ssh_key.k8s.name
 }
 
 # ── Outputs ───────────────────────────────────────────────────────────────────
@@ -53,6 +58,6 @@ output "cluster_ip" {
 
 # ── Import ────────────────────────────────────────────────────────────────────
 # terraform import zcp_kubernetes_cluster.main \
-#   '<slug>/<cloud_provider>/<region>/<version>/<plan>/<billing_cycle>/<storage_category>[/<project>/<ssh_key>]'
+#   '<slug>/<cloud_provider>/<region>/<version>/<control_plane_plan>/<worker_plan>/<storage_plan>/<root_disk_size>/<billing_cycle>/<storage_category>/<project>/<ssh_key>/<enable_csi>/<ha>'
 #   e.g. terraform import zcp_kubernetes_cluster.main \
-#     'main-cluster-abc/nimbo/yow-1/v1.36.1/k8s-li-yow-1/hourly/nvme'
+#     'main-cluster-abc/nimbo/yow-1/v1.36.4/k8s-cpi-yow-1/k8s-li-yow-1/b1g1/100/hourly/nvme/default-9/k8s-key/false/false'

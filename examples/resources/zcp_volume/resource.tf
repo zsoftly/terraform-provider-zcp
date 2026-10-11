@@ -17,14 +17,16 @@ resource "zcp_volume" "data" {
 
 # ── Custom-size volume attached to an instance on creation ────────────────────
 resource "zcp_instance" "db" {
-  name             = "db-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network_plan     = "pnet-yow"
-  storage_category = "nvme"
+  name              = "db-01"
+  cloud_provider    = data.zcp_region.yow.cloud_provider
+  region            = data.zcp_region.yow.slug
+  template          = "ubuntu-2204-lts"
+  plan              = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
+  billing_cycle     = "hourly"
+  network_plan      = "pnet-yow"
+  storage_category  = "nvme"
 }
 
 resource "zcp_volume" "db_data" {

@@ -1,67 +1,63 @@
 ---
-page_title: "zcp-cli v0.0.29 to v0.0.31 Provider Audit"
+page_title: "zcp-cli v0.0.31 to v1.0.0 Provider Audit"
 description: |-
-  Maps released zcp-cli changes to Terraform provider behavior.
+  Maps released zcp-cli v1.0.0 changes to Terraform provider v1.0.0 behavior.
 ---
 
-# zcp-cli v0.0.29 to v0.0.31 Provider Audit
+# zcp-cli v0.0.31 to v1.0.0 Provider Audit
 
-This tracker compares the released
-[zcp-cli v0.0.29 to v0.0.31](https://github.com/zsoftly/zcp-cli/compare/v0.0.29...v0.0.31)
-range with this provider. The last provider release, v0.2.0, uses zcp-cli
-v0.0.29. Provider commit
-[`87cd27ba31b4edb908621499aa28b4d07124e9ed`](https://github.com/zsoftly/terraform-provider-zcp/tree/87cd27ba31b4edb908621499aa28b4d07124e9ed)
-uses v0.0.30. This change adopts
-[v0.0.31](https://github.com/zsoftly/zcp-cli/tree/v0.0.31).
+This tracker compares the published
+[v0.0.31 to v1.0.0 range](https://github.com/zsoftly/zcp-cli/compare/v0.0.31...v1.0.0).
+Provider v1.0.0 resolves the published zcp-cli v1.0.0 SDK with `GOWORK=off`. The
+table records the provider changes and their verification scope.
 
-The tracker records whether a CLI change affects Terraform behavior. It does not
-turn command presentation or CLI continuation tokens into provider schema.
+| SDK or CLI change                                                                                                              | Provider disposition                                                                                                                                                                                                                                  |
+| ------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Kubernetes separate control-plane, worker, storage plans, root disk capacity, CSI, response details, and autoscaling endpoints | Implemented in `zcp_kubernetes_cluster`. Fixed plans and root size replace clusters because no role-specific update API exists. Network and root-volume slugs are computed. Kubeconfig is excluded from state.                                        |
+| Kubernetes autoscaling commands and bounds                                                                                     | Implemented. A staging workload did not trigger scale-out, and scale or autoscale calls recreated root-volume subscriptions. The provider reports accepted bounds and does not promise a scale-out or stable subscription state.                      |
+| Kubernetes deletion through billing cancellation                                                                               | Implemented. Destroy validates lifecycle state, submits immediate service cancellation, and polls for absence.                                                                                                                                        |
+| Compute plan and root-disk handling                                                                                            | Implemented by `zcp_instance`. New instances require a named compute plan, `blockstorage_plan`, and `root_disk_size`; custom CPU, memory, and disk inputs are rejected. Legacy custom-plan state remains readable and destroyable.                    |
+| DNS pagination and FindBySlug                                                                                                  | Implemented by `zcp_dns_domain`. Reads locate domains through the paginated SDK lookup and remove state only when no matching slug exists.                                                                                                            |
+| Scheduler API                                                                                                                  | Implemented by `zcp_vm_backup_schedule`. It creates, reads, updates, pauses, resumes, deletes, imports, and scopes VM backup policies. The resource verifies the VM before create and verifies returned policy identity, action, region, and project. |
+| VM backup restore and schedule run-now                                                                                         | CLI operational behavior only. A restore or an ad hoc run does not describe durable Terraform state.                                                                                                                                                  |
+| CLI validation, help text, printer changes, and smoke workflows                                                                | CLI-only behavior. Terraform uses framework configuration, diagnostics, and state.                                                                                                                                                                    |
+| Backup schedule intervals                                                                                                      | `zcp_vm_backup_schedule` supports `hourly`, `dailyAt`, `weeklyOn`, and `monthlyOn`. `everyOtherDay` is rejected before a request because the platform persists it and then reports an error.                                                          |
+| Plan tags                                                                                                                      | Implemented by `data.zcp_plan.tag`, using the SDK's `tag` value with its legacy label fallback.                                                                                                                                                       |
 
-| zcp-cli change                                                                                                                                                                | Provider disposition                                                                                                                                                                                           | Evidence                                                                                                                                                                                                              |
-| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Custom instance plans send `plan: null` with `custom_plan`. CPU and memory validation matches the API. CPU, memory, and disk are required together, and disk must be positive | Already implemented. The provider supports custom plans, import, and replacement behavior.                                                                                                                     | [instance resource](../internal/provider/resource_instance.go), [instance tests](../internal/provider/resource_instance_test.go)                                                                                      |
-| Object storage reads use `offering.storage`. Stats use an `int64` total                                                                                                       | Already implemented. Allocation reads the offering value. Usage is not a provider attribute.                                                                                                                   | [object storage resource](../internal/provider/resource_object_storage.go)                                                                                                                                            |
-| Missing object-storage status displays as `-`                                                                                                                                 | CLI-only presentation. The provider does not expose this display field.                                                                                                                                        | [zcp-cli object-storage command](https://github.com/zsoftly/zcp-cli/blob/v0.0.30/internal/commands/objectstorage.go)                                                                                                  |
-| Object-storage API credentials are excluded from SDK serialization and YAML field names use snake_case                                                                        | Inherited SDK and library presentation behavior. It is irrelevant to the Terraform schema. The provider preserves credentials already held in state and does not depend on SDK serialization.                  | [object storage resource](../internal/provider/resource_object_storage.go)                                                                                                                                            |
-| S3 region routing and direct S3 operations require an active `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` pair                                                                 | Already implemented for bucket resources. The object-storage key work in this release documents the pair and protects stored credentials after the visibility window closes.                                   | [bucket documentation](resources/object_storage_bucket.md), [object-storage key resource](../internal/provider/resource_object_storage_key.go)                                                                        |
-| Object-storage key list, create, and delete support one or two active keys. Deletion revokes a key                                                                            | Addressed in this change. The resource handles the API's credential disclosure window, revoked keys, and legacy S3 credential preservation.                                                                    | [object-storage key resource](../internal/provider/resource_object_storage_key.go), [key tests](../internal/provider/resource_object_storage_test.go)                                                                 |
-| Initial object-storage create output includes a key only while the API discloses it                                                                                           | Terraform does not own an initial CLI response. The object-storage key resource records a newly disclosed credential pair and preserves its secret on later reads.                                             | [object-storage key resource](../internal/provider/resource_object_storage_key.go)                                                                                                                                    |
-| S3 object transfer, presigning, and incomplete-upload handling                                                                                                                | CLI-only operation behavior. The provider manages bucket configuration, not objects, transfers, presigned URLs, or incomplete uploads.                                                                         | [zcp-cli object-storage command](https://github.com/zsoftly/zcp-cli/blob/v0.0.31/internal/commands/objectstorage.go)                                                                                                  |
-| Load balancer `Get` and rule listing expose detailed rules and rule IDs                                                                                                       | Addressed in this change. The load-balancer resource, rule resource, and attachment resource refresh through `Get`. Refresh clears a missing initial `rule_id`, and `data.zcp_load_balancer` exposes rule IDs. | [load-balancer resource](../internal/provider/resource_load_balancer.go), [detail tests](../internal/provider/resource_load_balancer_detail_test.go), [data source](../internal/provider/datasource_load_balancer.go) |
-| HTTP redaction covers `api_secret`                                                                                                                                            | Inherited SDK behavior. No provider-specific change is required for the SDK's HTTP redaction.                                                                                                                  | [zcp-cli redaction change](https://github.com/zsoftly/zcp-cli/blob/v0.0.30/pkg/httpclient/redact.go)                                                                                                                  |
-| ACL `ListRules` retrieves every page and fails rather than returning a partial list                                                                                           | Addressed in this change. ACL rule refresh and post-create lookup use `ListRules`, with local HTTP tests for page-two rules and later-page errors.                                                             | [ACL rule resource](../internal/provider/resource_network_acl_rule.go), [ACL tests](../internal/provider/resource_network_acl_rule_test.go)                                                                           |
-| ACL CLI flags and continuation tokens                                                                                                                                         | CLI-only. Terraform refreshes the complete ACL rule set through `acl.Service.ListRules`. Tokens and page-size flags are not resource attributes.                                                               | [zcp-cli ACL API](https://github.com/zsoftly/zcp-cli/blob/v0.0.31/pkg/api/acl/acl.go)                                                                                                                                 |
-| CLI printer output selection                                                                                                                                                  | CLI-only presentation. Terraform uses the framework's state and diagnostics protocol.                                                                                                                          | [zcp-cli printer change](https://github.com/zsoftly/zcp-cli/blob/v0.0.30/internal/commands/helpers.go)                                                                                                                |
-| Go 1.26.9 and `golang.org/x/net` v0.60.0 security updates                                                                                                                     | Addressed in this change. Provider builds and release automation select Go 1.26.9 and the module graph selects `x/net` v0.60.0.                                                                                | [module definition](../go.mod), [CI workflow](../.github/workflows/ci.yml)                                                                                                                                            |
+## Verification status
 
-The linked provider tests cover the API detail response and its nested rule IDs.
+Local unit tests, `GOWORK=off` vet, and a provider build cover the SDK
+integration. On 2026-10-11, a local provider built with `GOWORK=off` against the
+published SDK v1.0.0 completed staging catalog reads for compute, storage, and
+Kubernetes.
 
-## Live validation, 2026-10-09
+A named-plan VM with a 20 GB root disk created in 72 seconds and refreshed to
+zero diff. A backup schedule using the provider default project created in 9
+seconds; retention, timezone, and pause changes updated in place in 9 seconds.
+Weekly, monthly, hourly, and daily schedules resumed in place and refreshed to
+zero diff. Import refreshed to zero diff. Terraform destroyed the schedule in 2
+seconds, VM in 26 seconds, and network in 18 seconds, leaving state empty.
 
-Live Terraform validation covered the changes in this tracker.
+A one-control-plane, one-worker Kubernetes cluster using separate plans, a 100
+GB root disk, and a CSI request reached `Running` in 264 seconds. Its network
+and two root volumes were returned, refresh was zero diff, and a fresh 14-field
+split-plan import with explicit `ha = false` refreshed to zero diff.
 
-- ACL validation created a rule set of 10 rules, expanded it to 12 rules, and
-  confirmed that a subsequent plan reported zero changes. The ACL resources were
-  removed.
-- The CLI pagination controls returned bounded results of 5, then 5, then 2
-  rules. A single-page result returned 10 rules and a continuation token.
-- Object-storage validation created, refreshed, and destroyed a store key and
-  bucket versioning and tagging configuration. After the API's five-minute
-  disclosure window elapsed, the key pair already in state remained unchanged.
-- A custom instance with 2 CPU, 2 GB of memory, and a 20 GB disk reached the
-  running state.
-- Load-balancer creation, an additional rule, and the load-balancer data source
-  completed. The API omitted the configured initial rule on a fresh read. The
-  attachment create request succeeded, but a subsequent detach request reported
-  that the VM was not assigned to the rule.
+A manual Kubernetes worker resize from one to two completed in 158 seconds and
+refreshed to zero diff. Autoscaling enable completed in 24 seconds, and a
+maximum-worker update from two to three completed in 20 seconds. Both refreshed
+to zero diff. The final local provider disabled autoscaling and reduced workers
+from two to one in 85 seconds, followed by a zero-diff plan. It disabled
+autoscaling before resizing. The cluster deleted in 71 seconds and its SSH key
+in 1 second; nodes and root volumes were absent afterward. Cluster cancellation
+left an empty network and an active subscription. Terraform imported that
+residual network into an isolated cleanup fixture and destroyed it in 1 second.
+A final paginated inventory found no test matches, and all three Terraform
+states had no managed resources. The validation did not run a backup, restore a
+backup, trigger automatic scale-out, or run a CSI workload.
 
-The live checks did not confirm load-balancer traffic delivery or attachment
-membership. No backend cause has been established. Terraform attachment cleanup
-completed after the API reported that the VM was already unassigned, and the VM
-was destroyed. Terraform then attempted to delete the remaining additional rule.
-The API rejected that request because a load balancer must retain one active
-rule. The provider reports this error and does not delete the load balancer when
-only rule destruction was requested. The test load balancer and dedicated IP
-were removed through the CLI. Terraform then removed the remaining network.
-Follow-up API checks found no test resources or associated IPs, and all three
-Terraform states contain no managed resources.
+## Historical live evidence
+
+The 2026-10-09 live checks for v0.3.0 remain historical evidence for ACL,
+object-storage, custom-instance, and load-balancer behavior. They do not verify
+this v1.0.0 change set.

@@ -299,6 +299,16 @@ func NewVMBackupResourceWithService(svc vmBackupServiceIface) resource.Resource 
 	return &vmBackupResource{svc: svc, deletePollInterval: time.Millisecond}
 }
 
+// NewVMBackupScheduleResourceWithService creates a VM backup schedule resource
+// pre-wired with the given service; available only in test binaries.
+func NewVMBackupScheduleResourceWithService(svc vmBackupScheduleService, instances ...vmBackupScheduleInstanceLister) resource.Resource {
+	r := &vmBackupScheduleResource{svc: svc}
+	if len(instances) > 0 {
+		r.instances = instances[0]
+	}
+	return r
+}
+
 // NewVolumeSnapshotResourceWithService creates a volumeSnapshotResource pre-wired
 // with the given service; available only in test binaries.
 func NewVolumeSnapshotResourceWithService(svc volumeSnapshotServiceIface) resource.Resource {

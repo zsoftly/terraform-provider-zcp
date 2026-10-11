@@ -30,10 +30,15 @@ import (
 //
 //	ZCP_ACC_TEMPLATE            zcp_instance template slug
 //	ZCP_ACC_INSTANCE_PLAN       zcp_instance compute plan slug
+//	ZCP_ACC_INSTANCE_STORAGE_PLAN    zcp_instance root-volume storage plan slug
+//	ZCP_ACC_INSTANCE_ROOT_DISK_SIZE  zcp_instance root-volume capacity in GB
 //	ZCP_ACC_STORAGE_CATEGORY    storage category slug (volume + k8s)
 //	ZCP_ACC_VOLUME_PLAN         zcp_volume plan slug
 //	ZCP_ACC_K8S_VERSION         zcp_kubernetes_cluster version (e.g. v1.36.1)
-//	ZCP_ACC_K8S_PLAN            zcp_kubernetes_cluster plan slug
+//	ZCP_ACC_K8S_CONTROL_PLANE_PLAN  zcp_kubernetes_cluster control-plane plan slug
+//	ZCP_ACC_K8S_WORKER_PLAN         zcp_kubernetes_cluster worker plan slug
+//	ZCP_ACC_K8S_STORAGE_PLAN        zcp_kubernetes_cluster root-volume plan slug
+//	ZCP_ACC_K8S_ROOT_DISK_SIZE      root-volume capacity in GB
 
 // testAccPreCheck verifies the baseline credentials common to all acceptance
 // tests. Call it from a test's PreCheck closure.

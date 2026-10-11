@@ -6,9 +6,11 @@ description: |-
 
 # zcp_instance
 
-Manages a ZCP virtual machine instance. Create **blocks until the instance
-reaches the `Running` state** (mirroring the CLI's `--wait`). `private_ip` and
-`public_ip` are populated in state once the resource finishes applying.
+Manages a ZCP virtual machine instance. Creation waits until the instance
+reaches the `Running` state. The provider updates name, plan/billing_cycle,
+user_data, and tags in place. The provider reports runtime state in state.
+`private_ip` and `public_ip` are populated in state once the resource finishes
+applying.
 
 The resource maps the CLI's instance operations to Terraform's declarative
 model:
@@ -19,14 +21,13 @@ model:
 - **Force replacement:** `cloud_provider`, `region`, `template` (an OS/template
   change reprovisions the disk), and the other create-only inputs (`project`,
   `ssh_key`, `network`, `network_plan`, `network_type`, `vr_plan`, `networks`,
-  `default_network`, `assign_public_ip`, `storage_category`, `cpu`, `memory_gb`,
-  `disk_gb`).
+  `default_network`, `assign_public_ip`, `storage_category`,
+  `blockstorage_plan`, `root_disk_size`).
 
-Set either a fixed catalogue `plan`, or omit `plan` and set all custom VM plan
-inputs: `cpu`, `memory_gb`, and `disk_gb`. Custom memory and disk values are in
-GB, matching the ZCP API and CLI. A `billing_cycle` change updates fixed-plan
-instances in place, but forces replacement for custom-plan instances because the
-current change-plan API accepts only catalogue plan slugs.
+New instances accept named plans only. The provider rejects custom CPU, memory,
+and disk plans. The legacy `cpu`, `memory_gb`, and `disk_gb` attributes remain
+in the schema so the provider still reads and destroys existing state without
+replacement.
 
 **Networking.** `network_type` selects the network model. Leave it unset for
 `Isolated`, or set `L2` for a plain network, or `Vpc` for a network behind a
@@ -81,11 +82,10 @@ Imperative, non-declarative CLI operations (`reboot`/`reset`, `change-password`,
 creation but are not all echoed back in a comparable form on refresh. They are
 preserved in Terraform state.
 
-~> **Public-platform requirement:** although the network attributes and
-`storage_category` are schema-optional (private-cloud configurations may omit
-them), the public ZCP API **requires** a network (`network` or `network_plan`)
-and `storage_category` when creating an instance and returns a `422` validation
-error otherwise.
+~> **Create requirement:** `storage_category` remains schema-optional so legacy
+state can be read and destroyed, but new instances must set it. The provider
+validates this before sending the create request. New instances also require a
+network source as described above.
 
 ## Example Usage
 
@@ -98,7 +98,7 @@ resource "zcp_network" "app" {
   name           = "app-net"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  network_plan   = "inet-yow"
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
@@ -106,27 +106,10 @@ resource "zcp_instance" "web" {
   name             = "web-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
-  billing_cycle    = "hourly"
-  network          = zcp_network.app.id
-  storage_category = "nvme"
-  ssh_key          = "deploy-key"
-}
-```
-
-A custom-plan instance omits `plan` and provides CPU, memory, and root disk
-inputs:
-
-```terraform
-resource "zcp_instance" "custom" {
-  name             = "custom-01"
-  cloud_provider   = data.zcp_region.yow.cloud_provider
-  region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  cpu              = 2
-  memory_gb        = 4
-  disk_gb          = 45
+  template         = "ubuntu-2204-lts"
+  plan             = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
   billing_cycle    = "hourly"
   network          = zcp_network.app.id
   storage_category = "nvme"
@@ -141,8 +124,10 @@ resource "zcp_instance" "vpc" {
   name             = "vpc-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
+  template         = "ubuntu-2204-lts"
+  plan             = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
   billing_cycle    = "hourly"
   network_type     = "Vpc"
   vr_plan          = "vr-basic"
@@ -159,7 +144,7 @@ resource "zcp_network" "app_secondary" {
   name           = "app-net-2"
   cloud_provider = data.zcp_region.yow.cloud_provider
   region         = data.zcp_region.yow.slug
-  network_plan   = "inet-yow"
+  network_plan   = "pnet-yow"
   billing_cycle  = "hourly"
 }
 
@@ -167,8 +152,10 @@ resource "zcp_instance" "multi_net" {
   name             = "multi-net-01"
   cloud_provider   = data.zcp_region.yow.cloud_provider
   region           = data.zcp_region.yow.slug
-  template         = "ubuntu-2404-lts"
-  plan             = "ci1xs"
+  template         = "ubuntu-2204-lts"
+  plan             = "ca1hcs"
+  blockstorage_plan = "b1g1"
+  root_disk_size    = 100
   billing_cycle    = "hourly"
   networks         = [zcp_network.app.id, zcp_network.app_secondary.id]
   default_network  = zcp_network.app.id
@@ -185,18 +172,14 @@ not fit this scheme as a single value, so it is a trailing comma-separated
 segment of its own:
 
 ```shell
-terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<networks>]'
+terraform import zcp_instance.web '<slug>/<cloud_provider>/<region>/<template>[/<plan>/<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<blockstorage_plan>/<root_disk_size>/<networks>]'
 ```
 
 `<slug>/<cloud_provider>/<region>/<template>` are required. `name`, `state` and
 the IPs come from the subsequent read.
 
-For a custom-plan instance, leave the `plan` segment empty and include
-`cpu`/`memory_gb`/`disk_gb` after `default_network`:
-
-```shell
-terraform import zcp_instance.custom '<slug>/<cloud_provider>/<region>/<template>//<billing_cycle>/<project>/<ssh_key>/<network>/<network_plan>/<storage_category>/<network_type>/<vr_plan>/<default_network>/<cpu>/<memory_gb>/<disk_gb>[/<networks>]'
-```
+The provider still accepts legacy custom-plan import IDs for reading and
+destroying earlier state. New instances use named plans.
 
 ## Schema
 
@@ -211,27 +194,21 @@ terraform import zcp_instance.custom '<slug>/<cloud_provider>/<region>/<template
 - `template` (String) Template (OS image) slug. See `data.zcp_template`.
   Changing this forces replacement.
 - `billing_cycle` (String) Billing cycle (`hourly` or `monthly`). Updated in
-  place together with `plan` for fixed-plan instances. Changing this on a
-  custom-plan instance forces replacement.
+  place together with `plan`.
 
 ### Optional
 
 - `project` (String) Project slug. Inherits from the provider `default_project`
   if omitted. Changing this forces replacement.
-- `plan` (String) Compute plan slug. Run `zcp plan vm` to list values. Exactly
-  one of `plan` or the complete custom plan inputs (`cpu`, `memory_gb`, and
-  `disk_gb`) must be set. Updated in place (resize): the provider stops the
-  instance, changes the offering, and restarts it to its prior running/stopped
-  state.
-- `cpu` (Number) Number of vCPUs for a custom VM plan. Must be at least 2. Set
-  together with `memory_gb` and `disk_gb`, and omit `plan`. Changing this forces
-  replacement.
-- `memory_gb` (Number) RAM in GB for a custom VM plan. Must be greater than 0
-  and no more than 256. Set together with `cpu` and `disk_gb`, and omit `plan`.
-  Changing this forces replacement.
-- `disk_gb` (Number) Root disk size in GB for a custom VM plan. Must be greater
-  than 0. Set together with `cpu` and `memory_gb`, and omit `plan`. Changing
-  this forces replacement.
+- `plan` (String) Named compute plan slug. Required for new instances. Updated
+  in place (resize).
+- `blockstorage_plan` (String) Named root-volume storage tier. Required for new
+  instances. Changing this forces replacement.
+- `root_disk_size` (Number) Root-volume capacity in GB. Required for new
+  instances and must be greater than zero. Changing this forces replacement.
+- `cpu`, `memory_gb`, `disk_gb` (Number) Deprecated legacy custom-plan fields.
+  They remain only to decode, read, and destroy state from earlier provider
+  versions. New instances reject them.
 - `ssh_key` (String) Name of an existing SSH key to attach for login (see
   `zcp_ssh_key`). Changing this forces replacement.
 - `network` (String) Slug of an existing `zcp_network` to attach the instance
