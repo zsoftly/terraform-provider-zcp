@@ -15,11 +15,13 @@ to [Semantic Versioning](https://semver.org/).
   plan update operation. The provider still reads and destroys state from the
   earlier single-plan model.
 - Kubernetes autoscaling manages requested minimum and maximum workers. The
-  platform decides whether to scale out, so apply confirms bounds rather than a
-  future worker count. Autoscaling can leave billing and observed workers in
-  flux; Terraform does not promise immediate scale-out or a final bill.
-- Kubernetes destroy uses the service-cancellation workflow and waits for the
-  cluster to disappear. Kubeconfig and cluster credentials are not stored.
+  platform decides whether to scale out, so Terraform confirms accepted bounds
+  rather than a future worker count. Autoscaling can leave billing and observed
+  workers in flux; Terraform does not promise immediate scale-out or a final
+  bill.
+- The provider uses the service-cancellation workflow during Kubernetes destroy
+  and waits for the cluster to disappear. Kubeconfig and cluster credentials are
+  not stored.
 - DNS domain reads use the SDK's paginated slug lookup. `data.zcp_plan` exposes
   the decoded plan `tag`.
 - New instances require a named compute plan, `blockstorage_plan`, and

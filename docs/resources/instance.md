@@ -8,9 +8,9 @@ description: |-
 
 Manages a ZCP virtual machine instance. Creation waits until the instance
 reaches the `Running` state. The provider updates name, plan/billing_cycle,
-user_data, and tags in place. The provider reports runtime state in state.
-`private_ip` and `public_ip` are populated in state once the resource finishes
-applying.
+user_data, and tags in place. The provider reports runtime state through the
+`state` attribute. `private_ip` and `public_ip` are populated in state once the
+resource finishes applying.
 
 The resource maps the CLI's instance operations to Terraform's declarative
 model:

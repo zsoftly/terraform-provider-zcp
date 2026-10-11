@@ -15,8 +15,8 @@ storage configuration, Kubernetes autoscaling settings, and VM backup schedules.
   Existing custom-plan state remains readable and destroyable.
 - Kubernetes clusters use separate control-plane, worker, and root-volume plans,
   plus root disk capacity and autoscaling bounds. The legacy `plan` attribute
-  remains for existing state only. Changing a cluster to split plans replaces
-  it.
+  remains for existing state only. Changing an existing cluster to split-plan
+  configuration forces replacement.
 - Review the upgrade plan before applying. Existing resources are preserved in
   state, but creating or replacing an instance or cluster requires the new
   named-plan fields.
@@ -24,7 +24,7 @@ storage configuration, Kubernetes autoscaling settings, and VM backup schedules.
   persists the interval and then reports an error. Use `hourly`, `dailyAt`,
   `weeklyOn`, or `monthlyOn`.
 - One-off VM backup restores and run-now operations remain CLI commands because
-  they do not describe durable Terraform state.
+  Terraform does not model them as durable state.
 - Staging testing did not demonstrate successful automatic scale-out. Scale and
   autoscale calls recreated root-volume subscriptions. The provider records
   accepted autoscaling bounds and does not promise a scale-out or stable
