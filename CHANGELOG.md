@@ -5,6 +5,14 @@ OpenTofu. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project adheres
 to [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- `zcp_volume_snapshot_schedule` manages block storage snapshot scheduler
+  policies, including timing, timezone, retention, paused state, import, and
+  scope checks.
+
 ## [v1.0.0] - 2026-10-11
 
 ### Changed

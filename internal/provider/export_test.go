@@ -320,6 +320,16 @@ func NewVMBackupScheduleResourceWithService(svc vmBackupScheduleService, instanc
 	return r
 }
 
+// NewVolumeSnapshotScheduleResourceWithService creates a block storage snapshot
+// schedule resource pre-wired with the given services; available only in test binaries.
+func NewVolumeSnapshotScheduleResourceWithService(svc volumeSnapshotScheduleService, volumes ...volumeSnapshotScheduleVolumeLister) resource.Resource {
+	r := &volumeSnapshotScheduleResource{svc: svc}
+	if len(volumes) > 0 {
+		r.volumes = volumes[0]
+	}
+	return r
+}
+
 // NewVolumeSnapshotResourceWithService creates a volumeSnapshotResource pre-wired
 // with the given service; available only in test binaries.
 func NewVolumeSnapshotResourceWithService(svc volumeSnapshotServiceIface) resource.Resource {
