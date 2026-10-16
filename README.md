@@ -16,7 +16,7 @@ store's S3-compatible gateway through the same SDK. The SDK resolves the gateway
 endpoint from the selected object-storage instance, without a hardcoded regional
 endpoint. The provider uses the [zcp CLI](https://github.com/zsoftly/zcp-cli).
 
-45 resources and 14 data sources. Full reference under [docs/](docs/), runnable
+46 resources and 14 data sources. Full reference under [docs/](docs/), runnable
 configurations under [examples/](examples/).
 
 ## Requirements

@@ -51,7 +51,8 @@ provider "zcp" {
 ## Local Development
 
 The examples use provider v1.0.0, which includes separate Kubernetes node and
-storage plans, VM backup schedules, and plan tags.
+storage plans, VM backup schedules, and plan tags. The development build also
+includes block storage snapshot schedules.
 
 During development, use `dev_overrides` instead of a registry install. A single
 binary works for both CLIs via config.
