@@ -8,7 +8,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
-	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/booldefault"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -81,7 +81,7 @@ func (r *volumeSnapshotScheduleResource) Schema(_ context.Context, _ resource.Sc
 		"at":          schema.StringAttribute{Required: true},
 		"timezone":    schema.StringAttribute{Required: true},
 		"retention":   schema.Int64Attribute{Required: true},
-		"immediate":   schema.BoolAttribute{Optional: true, PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()}},
+		"immediate":   schema.BoolAttribute{Optional: true, Computed: true, Default: booldefault.StaticBool(false), PlanModifiers: []planmodifier.Bool{requiresReplaceBoolUnlessAdopting()}},
 		"paused":      schema.BoolAttribute{Optional: true, Computed: true},
 		"region":      schema.StringAttribute{Required: true, PlanModifiers: replaceString},
 		"project":     schema.StringAttribute{Optional: true, PlanModifiers: replaceString},

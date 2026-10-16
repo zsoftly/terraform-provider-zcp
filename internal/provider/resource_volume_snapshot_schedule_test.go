@@ -3,11 +3,16 @@ package provider_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/defaults"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"github.com/zsoftly/zcp-cli/pkg/api/apierrors"
 	"github.com/zsoftly/zcp-cli/pkg/api/scheduler"
@@ -132,6 +137,133 @@ func TestVolumeSnapshotScheduleResourceCreateRequestsImmediateSnapshot(t *testin
 	}
 	if svc.created.TakeOneImmediately != 1 || svc.created.Config.TakeOneImmediately != 1 {
 		t.Fatalf("immediate payload: %#v", svc.created)
+	}
+}
+
+func TestVolumeSnapshotScheduleResourceImmediateAdoptsAfterImport(t *testing.T) {
+	r := internalprovider.NewVolumeSnapshotScheduleResource()
+	var schemaResponse resource.SchemaResponse
+	r.Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	attribute := schemaResponse.Schema.Attributes["immediate"].(schema.BoolAttribute)
+
+	cases := []struct {
+		name     string
+		state    types.Bool
+		plan     types.Bool
+		replaces bool
+	}{
+		{name: "imported false", state: types.BoolNull(), plan: types.BoolValue(false)},
+		{name: "imported true", state: types.BoolNull(), plan: types.BoolValue(true)},
+		{name: "known false to true", state: types.BoolValue(false), plan: types.BoolValue(true), replaces: true},
+		{name: "known true to false", state: types.BoolValue(true), plan: types.BoolValue(false), replaces: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stateConfig := volumeSnapshotScheduleConfig("policy-1", false)
+			stateConfig["immediate"] = tftypes.NewValue(tftypes.Bool, tc.state.ValueBool())
+			if tc.state.IsNull() {
+				stateConfig["immediate"] = tftypes.NewValue(tftypes.Bool, nil)
+			}
+			planConfig := volumeSnapshotScheduleConfig("policy-1", false)
+			planConfig["immediate"] = tftypes.NewValue(tftypes.Bool, tc.plan.ValueBool())
+			_, stateRaw := rawFor(t, r, stateConfig)
+			_, planRaw := rawFor(t, r, planConfig)
+			req := planmodifier.BoolRequest{
+				Path:        path.Root("immediate"),
+				ConfigValue: tc.plan,
+				PlanValue:   tc.plan,
+				StateValue:  tc.state,
+				Plan:        tfsdk.Plan{Schema: schemaResponse.Schema, Raw: planRaw},
+				State:       tfsdk.State{Schema: schemaResponse.Schema, Raw: stateRaw},
+			}
+			resp := planmodifier.BoolResponse{PlanValue: req.PlanValue}
+			for _, modifier := range attribute.PlanModifiers {
+				modifier.PlanModifyBool(context.Background(), req, &resp)
+			}
+			if resp.RequiresReplace != tc.replaces {
+				t.Fatalf("RequiresReplace = %t, want %t", resp.RequiresReplace, tc.replaces)
+			}
+		})
+	}
+}
+
+func TestVolumeSnapshotScheduleResourceDefaultImmediatePersistsAndLaterReplaces(t *testing.T) {
+	r := internalprovider.NewVolumeSnapshotScheduleResource()
+	var schemaResponse resource.SchemaResponse
+	r.Schema(context.Background(), resource.SchemaRequest{}, &schemaResponse)
+	attribute := schemaResponse.Schema.Attributes["immediate"].(schema.BoolAttribute)
+	if attribute.Default == nil {
+		t.Fatal("immediate must default to false")
+	}
+	defaultResponse := &defaults.BoolResponse{}
+	attribute.Default.DefaultBool(context.Background(), defaults.BoolRequest{}, defaultResponse)
+	if defaultResponse.PlanValue != types.BoolValue(false) {
+		t.Fatalf("immediate default = %s, want false", defaultResponse.PlanValue)
+	}
+
+	svc := &fakeVolumeSnapshotScheduleService{policy: volumeSnapshotSchedulePolicy("Block Storage Snapshot")}
+	configured := volumeSnapshotScheduleConfig("", false)
+	configured["immediate"] = tftypes.NewValue(tftypes.Bool, defaultResponse.PlanValue.ValueBool())
+	created := runCreate(t, internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc, &fakeVolumeSnapshotScheduleVolumes{volumes: []volume.Volume{{Slug: "data-1"}}}), configured)
+	if created.Diagnostics.HasError() {
+		t.Fatalf("create diagnostics: %v", created.Diagnostics)
+	}
+	var immediate *bool
+	if diags := created.State.GetAttribute(context.Background(), path.Root("immediate"), &immediate); diags.HasError() {
+		t.Fatalf("read immediate state: %v", diags)
+	}
+	if immediate == nil || *immediate != defaultResponse.PlanValue.ValueBool() {
+		t.Fatalf("created immediate state = %v, want %t", immediate, defaultResponse.PlanValue.ValueBool())
+	}
+
+	_, planRaw := rawFor(t, r, func() map[string]tftypes.Value {
+		config := volumeSnapshotScheduleConfig("policy-1", false)
+		config["immediate"] = tftypes.NewValue(tftypes.Bool, true)
+		return config
+	}())
+	req := planmodifier.BoolRequest{
+		Path:        path.Root("immediate"),
+		ConfigValue: types.BoolValue(true),
+		PlanValue:   types.BoolValue(true),
+		StateValue:  defaultResponse.PlanValue,
+		Plan:        tfsdk.Plan{Schema: schemaResponse.Schema, Raw: planRaw},
+		State:       created.State,
+	}
+	response := planmodifier.BoolResponse{PlanValue: req.PlanValue}
+	for _, modifier := range attribute.PlanModifiers {
+		modifier.PlanModifyBool(context.Background(), req, &response)
+	}
+	if !response.RequiresReplace {
+		t.Fatal("setting immediate=true after a default false create must require replacement")
+	}
+}
+
+func TestVolumeSnapshotScheduleResourceUpdatePersistsAdoptedImmediate(t *testing.T) {
+	for _, wantImmediate := range []bool{false, true} {
+		t.Run(fmt.Sprintf("immediate=%t", wantImmediate), func(t *testing.T) {
+			svc := &fakeVolumeSnapshotScheduleService{policy: volumeSnapshotSchedulePolicy("Block Storage Snapshot")}
+			r := internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc)
+			state := volumeSnapshotScheduleConfig("policy-1", false)
+			state["immediate"] = tftypes.NewValue(tftypes.Bool, nil)
+			plan := volumeSnapshotScheduleConfig("policy-1", false)
+			plan["immediate"] = tftypes.NewValue(tftypes.Bool, wantImmediate)
+
+			resp := runUpdate(t, r, plan, state)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("update diagnostics: %v", resp.Diagnostics)
+			}
+			var immediate *bool
+			if diags := resp.State.GetAttribute(context.Background(), path.Root("immediate"), &immediate); diags.HasError() {
+				t.Fatalf("read immediate state: %v", diags)
+			}
+			if immediate == nil || *immediate != wantImmediate {
+				t.Fatalf("immediate state = %v, want %t", immediate, wantImmediate)
+			}
+			if svc.created.Service != "" || svc.deleted {
+				t.Fatalf("adoption created or deleted a policy: create=%#v deleted=%t", svc.created, svc.deleted)
+			}
+		})
 	}
 }
 

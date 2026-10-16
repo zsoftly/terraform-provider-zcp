@@ -27,6 +27,9 @@ resource "zcp_volume_snapshot_schedule" "data" {
 
 Import using `<id>/<region>[/<project>]`.
 
+Import leaves `immediate` unset. The first apply records the configured setting
+without creating a snapshot. Once recorded, later changes force replacement.
+
 ```shell
 terraform import zcp_volume_snapshot_schedule.data policy-1/yow-1
 ```
@@ -49,8 +52,8 @@ terraform import zcp_volume_snapshot_schedule.data policy-1/yow-1
   forces replacement.
 - `day` (Number) Weekday 0 through 6 for `weeklyOn`, or day 1 through 28 for
   `monthlyOn`.
-- `immediate` (Boolean) Request an immediate snapshot during creation. Changing
-  this field forces replacement.
+- `immediate` (Boolean) Request an immediate snapshot during creation. Defaults
+  to `false`. Changing this field forces replacement.
 - `paused` (Boolean) Pause or resume the schedule.
 - `project` (String) Project slug. Inherits from `default_project` when omitted.
 

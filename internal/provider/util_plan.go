@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema/boolplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/planmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 )
@@ -16,6 +17,19 @@ import (
 func requiresReplaceUnlessAdopting() planmodifier.String {
 	return stringplanmodifier.RequiresReplaceIf(
 		func(_ context.Context, req planmodifier.StringRequest, resp *stringplanmodifier.RequiresReplaceIfFuncResponse) {
+			resp.RequiresReplace = !req.StateValue.IsNull()
+		},
+		"Replaced when the prior value is known; adopted in place right after import.",
+		"Replaced when the prior value is known; adopted in place right after import.",
+	)
+}
+
+// requiresReplaceBoolUnlessAdopting lets the first apply save an imported value
+// without replacing the resource. Later changes to a stored value require
+// replacement. The resource's Update method must copy the plan into state.
+func requiresReplaceBoolUnlessAdopting() planmodifier.Bool {
+	return boolplanmodifier.RequiresReplaceIf(
+		func(_ context.Context, req planmodifier.BoolRequest, resp *boolplanmodifier.RequiresReplaceIfFuncResponse) {
 			resp.RequiresReplace = !req.StateValue.IsNull()
 		},
 		"Replaced when the prior value is known; adopted in place right after import.",
