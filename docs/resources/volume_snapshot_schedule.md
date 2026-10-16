@@ -10,6 +10,13 @@ Manages a block storage snapshot schedule. Schedule updates change its timing,
 timezone, and retention. Set `paused` to pause or resume a schedule. Terraform
 does not model one-off snapshot runs as durable state.
 
+Changing `name`, `description`, or `immediate` replaces the schedule. The
+platform rejects schedule deletion while its snapshots remain. Replacement
+therefore requires removing those snapshots first. Pause the schedule to retain
+snapshots without future runs. After import, the first apply records the
+configured `immediate` value without replacement. Later changes to `immediate`
+require replacement.
+
 ## Example Usage
 
 ```terraform

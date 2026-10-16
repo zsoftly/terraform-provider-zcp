@@ -198,12 +198,11 @@ func (r *volumeSnapshotScheduleResource) Create(ctx context.Context, req resourc
 		return
 	}
 	if err := r.validatePolicy(&m, p, false); err != nil {
-		policyID := ""
-		if p != nil {
-			policyID = p.ID
+		p, err = r.verifyCreatedPolicy(ctx, &m, p, err)
+		if err != nil {
+			resp.Diagnostics.AddError("Unable to verify created block storage snapshot schedule", err.Error())
+			return
 		}
-		resp.Diagnostics.AddError("Block storage snapshot schedule is outside configured scope", fmt.Sprintf("Created scheduler policy %q cannot be managed because %s", policyID, err))
-		return
 	}
 	if !m.Paused.IsNull() && m.Paused.ValueBool() {
 		created := p
@@ -223,6 +222,57 @@ func (r *volumeSnapshotScheduleResource) Create(ctx context.Context, req resourc
 	}
 	r.setModel(&m, p)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
+}
+
+// verifyCreatedPolicy only adopts a policy after the service returns a complete,
+// matching read-back for the ID returned by Create. A contradictory create
+// response is never followed by a mutating request.
+func (r *volumeSnapshotScheduleResource) verifyCreatedPolicy(ctx context.Context, m *volumeSnapshotScheduleModel, created *scheduler.Policy, validationErr error) (*scheduler.Policy, error) {
+	policyID := schedulerPolicyID(created)
+	if policyID == "" {
+		return nil, fmt.Errorf("the create response could not be verified because it did not include a policy ID. The policy was not saved to Terraform state. %s: %w", createdPolicyRecoveryInstructions(policyID), validationErr)
+	}
+	if r.hasExplicitPolicyScopeMismatch(m, created) {
+		return nil, fmt.Errorf("created scheduler policy %q was not saved to Terraform state because its response contradicts the configured scope: %w. %s", policyID, validationErr, createdPolicyRecoveryInstructions(policyID))
+	}
+	verified, err := r.svc.Get(ctx, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("created scheduler policy %q was not saved to Terraform state because its read-back could not be verified: %w. %s", policyID, err, createdPolicyRecoveryInstructions(policyID))
+	}
+	if schedulerPolicyID(verified) != policyID {
+		return nil, fmt.Errorf("created scheduler policy %q was not saved to Terraform state because its read-back returned policy %q. %s", policyID, schedulerPolicyID(verified), createdPolicyRecoveryInstructions(policyID))
+	}
+	if err := r.validatePolicy(m, verified, false); err != nil {
+		return nil, fmt.Errorf("created scheduler policy %q was not saved to Terraform state because its read-back did not match the configured scope: %w. %s", policyID, err, createdPolicyRecoveryInstructions(policyID))
+	}
+	return verified, nil
+}
+
+func createdPolicyRecoveryInstructions(policyID string) string {
+	if policyID == "" {
+		return "Locate the matching newly created schedule in the dashboard. Confirm its action, volume, region, and project before acting. If it is the confirmed matching schedule, pause it to stop future runs, then either import it into matching configuration or, if it is disposable, remove its snapshots and delete the policy before retrying apply"
+	}
+	return fmt.Sprintf("Inspect scheduler policy %q in the dashboard. Confirm its action, volume, region, and project before acting. If it is the confirmed matching schedule, pause it to stop future runs, then either import it into matching configuration or, if it is disposable, remove its snapshots and delete the policy before retrying apply", policyID)
+}
+
+func (r *volumeSnapshotScheduleResource) hasExplicitPolicyScopeMismatch(m *volumeSnapshotScheduleModel, p *scheduler.Policy) bool {
+	if p == nil {
+		return false
+	}
+	if p.Action != "" && !strings.EqualFold(p.Action, blockStorageSnapshotAction) {
+		return true
+	}
+	if p.Actionable != nil && p.Actionable.Slug != "" && !m.Volume.IsNull() && !m.Volume.IsUnknown() && p.Actionable.Slug != m.Volume.ValueString() {
+		return true
+	}
+	if p.Region != nil && p.Region.Slug != "" && p.Region.Slug != m.Region.ValueString() {
+		return true
+	}
+	expectedProject := r.projectOrDefault(m.Project)
+	if expectedProject != "" && p.Project != nil && p.Project.Slug != "" && p.Project.Slug != expectedProject {
+		return true
+	}
+	return false
 }
 
 func (r *volumeSnapshotScheduleResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
