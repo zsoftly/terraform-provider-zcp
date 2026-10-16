@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
@@ -23,23 +24,39 @@ import (
 
 type fakeVolumeSnapshotScheduleService struct {
 	policy                   scheduler.Policy
+	createPolicy             *scheduler.Policy
+	createNil                bool
+	getPolicy                *scheduler.Policy
 	created                  scheduler.CreateRequest
 	updated                  scheduler.UpdateRequest
 	updatePolicy             *scheduler.Policy
 	paused, resumed, deleted bool
 	getErr                   error
+	deleteErr                error
+	getIDs                   []string
+	pauseIDs                 []string
 	pausePolicy              *scheduler.Policy
 	resumePolicy             *scheduler.Policy
 }
 
-func (f *fakeVolumeSnapshotScheduleService) Get(_ context.Context, _ string) (*scheduler.Policy, error) {
+func (f *fakeVolumeSnapshotScheduleService) Get(_ context.Context, id string) (*scheduler.Policy, error) {
+	f.getIDs = append(f.getIDs, id)
 	if f.getErr != nil {
 		return nil, f.getErr
+	}
+	if f.getPolicy != nil {
+		return f.getPolicy, nil
 	}
 	return &f.policy, nil
 }
 func (f *fakeVolumeSnapshotScheduleService) Create(_ context.Context, req scheduler.CreateRequest) (*scheduler.Policy, error) {
 	f.created = req
+	if f.createNil {
+		return nil, nil
+	}
+	if f.createPolicy != nil {
+		return f.createPolicy, nil
+	}
 	return &f.policy, nil
 }
 func (f *fakeVolumeSnapshotScheduleService) Update(_ context.Context, _ string, req scheduler.UpdateRequest) (*scheduler.Policy, error) {
@@ -51,10 +68,14 @@ func (f *fakeVolumeSnapshotScheduleService) Update(_ context.Context, _ string, 
 }
 func (f *fakeVolumeSnapshotScheduleService) Delete(_ context.Context, _ string) (*scheduler.ActionResponse, error) {
 	f.deleted = true
+	if f.deleteErr != nil {
+		return nil, f.deleteErr
+	}
 	return &scheduler.ActionResponse{Status: "Success"}, nil
 }
-func (f *fakeVolumeSnapshotScheduleService) Pause(_ context.Context, _ string) (*scheduler.Policy, error) {
+func (f *fakeVolumeSnapshotScheduleService) Pause(_ context.Context, id string) (*scheduler.Policy, error) {
 	f.paused = true
+	f.pauseIDs = append(f.pauseIDs, id)
 	if f.pausePolicy != nil {
 		return f.pausePolicy, nil
 	}
@@ -307,20 +328,123 @@ func TestVolumeSnapshotScheduleResourcePreflightsScopedVolume(t *testing.T) {
 	}
 }
 
-func TestVolumeSnapshotScheduleResourceCreateDoesNotPersistOutOfScopePolicy(t *testing.T) {
-	policy := volumeSnapshotSchedulePolicy("Block Storage Snapshot")
-	policy.Actionable.Slug = "other-volume"
-	svc := &fakeVolumeSnapshotScheduleService{policy: policy}
-	r := internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc, &fakeVolumeSnapshotScheduleVolumes{volumes: []volume.Volume{{Slug: "data-1"}}})
-	resp := runCreate(t, r, volumeSnapshotScheduleConfig("", false))
-	if !resp.Diagnostics.HasError() {
-		t.Fatal("expected out-of-scope create diagnostic")
+func TestVolumeSnapshotScheduleResourceRecoversIncompleteCreateResponseBeforePausing(t *testing.T) {
+	cases := []struct {
+		name             string
+		mutate           func(*scheduler.Policy)
+		configureProject bool
+	}{
+		{name: "missing action", mutate: func(p *scheduler.Policy) { p.Action = "" }},
+		{name: "missing volume", mutate: func(p *scheduler.Policy) { p.Actionable = nil }},
+		{name: "missing region", mutate: func(p *scheduler.Policy) { p.Region = nil }},
+		{name: "missing project", mutate: func(p *scheduler.Policy) { p.Project = nil }, configureProject: true},
 	}
-	if !resp.State.Raw.IsNull() {
-		t.Fatal("out-of-scope scheduler policy must not be persisted in Terraform state")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			created := volumeSnapshotSchedulePolicy("Block Storage Snapshot")
+			created.Project = &scheduler.ScopeRef{Slug: "project-1"}
+			tc.mutate(&created)
+			verified := volumeSnapshotSchedulePolicy("Block Storage Snapshot")
+			verified.Project = &scheduler.ScopeRef{Slug: "project-1"}
+			svc := &fakeVolumeSnapshotScheduleService{policy: verified, createPolicy: &created, getPolicy: &verified}
+			r := internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc, &fakeVolumeSnapshotScheduleVolumes{volumes: []volume.Volume{{Slug: "data-1"}}})
+			config := volumeSnapshotScheduleConfig("", true)
+			if tc.configureProject {
+				config["project"] = strVal("project-1")
+			}
+			resp := runCreate(t, r, config)
+			if resp.Diagnostics.HasError() {
+				t.Fatalf("create diagnostics: %v", resp.Diagnostics)
+			}
+			if stateID(t, resp.State) != "policy-1" || !svc.paused {
+				t.Fatalf("recovered policy was not paused and persisted: state=%q paused=%t", stateID(t, resp.State), svc.paused)
+			}
+			if len(svc.getIDs) != 1 || svc.getIDs[0] != "policy-1" || len(svc.pauseIDs) != 1 || svc.pauseIDs[0] != "policy-1" {
+				t.Fatalf("unexpected recovery requests: get=%v pause=%v", svc.getIDs, svc.pauseIDs)
+			}
+		})
 	}
-	if svc.paused {
-		t.Fatal("out-of-scope scheduler policy must not receive follow-up actions")
+}
+
+func TestVolumeSnapshotScheduleResourceDoesNotPersistExplicitlyOutOfScopeCreatePolicy(t *testing.T) {
+	cases := []struct {
+		name   string
+		mutate func(*scheduler.Policy)
+	}{
+		{name: "action", mutate: func(p *scheduler.Policy) { p.Action = "VM Backup" }},
+		{name: "volume", mutate: func(p *scheduler.Policy) { p.Actionable.Slug = "other-volume" }},
+		{name: "region", mutate: func(p *scheduler.Policy) { p.Region.Slug = "yyz-1" }},
+		{name: "project", mutate: func(p *scheduler.Policy) { p.Project = &scheduler.ScopeRef{Slug: "other-project"} }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			policy := volumeSnapshotSchedulePolicy("Block Storage Snapshot")
+			tc.mutate(&policy)
+			svc := &fakeVolumeSnapshotScheduleService{policy: policy}
+			r := internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc, &fakeVolumeSnapshotScheduleVolumes{volumes: []volume.Volume{{Slug: "data-1"}}})
+			config := volumeSnapshotScheduleConfig("", true)
+			if tc.name == "project" {
+				config["project"] = strVal("project-1")
+			}
+			resp := runCreate(t, r, config)
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("expected out-of-scope create diagnostic")
+			}
+			if !resp.State.Raw.IsNull() || svc.paused || svc.resumed || svc.deleted || len(svc.getIDs) != 0 {
+				t.Fatalf("out-of-scope scheduler policy received unsafe follow-up: state=%v paused=%t resumed=%t deleted=%t get=%v", resp.State.Raw, svc.paused, svc.resumed, svc.deleted, svc.getIDs)
+			}
+			diagnostic := fmt.Sprint(resp.Diagnostics)
+			if !strings.Contains(diagnostic, "scheduler policy \"policy-1\"") || !strings.Contains(diagnostic, "Confirm its action, volume, region, and project before acting") || !strings.Contains(diagnostic, "import it into matching configuration") {
+				t.Fatalf("diagnostic %q does not provide safe recovery instructions", diagnostic)
+			}
+		})
+	}
+}
+
+func TestVolumeSnapshotScheduleResourceDoesNotPersistUnverifiedCreatePolicy(t *testing.T) {
+	valid := volumeSnapshotSchedulePolicy("Block Storage Snapshot")
+	incomplete := valid
+	incomplete.Actionable = nil
+	cases := []struct {
+		name       string
+		create     *scheduler.Policy
+		get        *scheduler.Policy
+		getErr     error
+		createNil  bool
+		knownID    bool
+		wantPolicy string
+	}{
+		{name: "nil response", createNil: true, wantPolicy: "not include a policy ID"},
+		{name: "missing ID", create: &scheduler.Policy{}, wantPolicy: "not include a policy ID"},
+		{name: "read back error", create: &incomplete, getErr: errors.New("temporary read failure"), knownID: true, wantPolicy: "read-back could not be verified"},
+		{name: "read back not found", create: &incomplete, getErr: &apierrors.APIError{StatusCode: 404, Message: "not found"}, knownID: true, wantPolicy: "read-back could not be verified"},
+		{name: "different ID", create: &incomplete, get: func() *scheduler.Policy { p := valid; p.ID = "policy-2"; return &p }(), knownID: true, wantPolicy: "read-back returned policy \"policy-2\""},
+		{name: "incomplete read back", create: &incomplete, get: &incomplete, knownID: true, wantPolicy: "read-back did not match the configured scope"},
+		{name: "wrong read back scope", create: &incomplete, get: func() *scheduler.Policy { p := valid; p.Region = &scheduler.ScopeRef{Slug: "yyz-1"}; return &p }(), knownID: true, wantPolicy: "read-back did not match the configured scope"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc := &fakeVolumeSnapshotScheduleService{policy: valid, createPolicy: tc.create, createNil: tc.createNil, getPolicy: tc.get, getErr: tc.getErr}
+			r := internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc, &fakeVolumeSnapshotScheduleVolumes{volumes: []volume.Volume{{Slug: "data-1"}}})
+			resp := runCreate(t, r, volumeSnapshotScheduleConfig("", true))
+			if !resp.Diagnostics.HasError() {
+				t.Fatal("expected recovery diagnostic")
+			}
+			if !resp.State.Raw.IsNull() || svc.paused {
+				t.Fatalf("unverified policy was persisted or paused: state=%v paused=%t", resp.State.Raw, svc.paused)
+			}
+			diagnostic := fmt.Sprint(resp.Diagnostics)
+			if !strings.Contains(diagnostic, tc.wantPolicy) || !strings.Contains(diagnostic, "not saved to Terraform state") || !strings.Contains(diagnostic, "Confirm its action, volume, region, and project before acting") || !strings.Contains(diagnostic, "import it into matching configuration") {
+				t.Fatalf("diagnostic %q does not explain recovery", diagnostic)
+			}
+			if tc.knownID && !strings.Contains(diagnostic, "scheduler policy \"policy-1\"") {
+				t.Fatalf("diagnostic %q does not identify the known policy", diagnostic)
+			}
+			if !tc.knownID && strings.Contains(diagnostic, "scheduler policy \"\"") {
+				t.Fatalf("diagnostic %q invents an empty policy ID", diagnostic)
+			}
+		})
 	}
 }
 
@@ -440,6 +564,20 @@ func TestVolumeSnapshotScheduleResourceReadNotFoundRemovesState(t *testing.T) {
 	}
 	if !resp.State.Raw.IsNull() {
 		t.Fatal("expected state removal after scheduler policy is absent")
+	}
+}
+
+func TestVolumeSnapshotScheduleResourceDeleteReturnsBackendSnapshotRetentionError(t *testing.T) {
+	svc := &fakeVolumeSnapshotScheduleService{
+		policy:    volumeSnapshotSchedulePolicy("Block Storage Snapshot"),
+		deleteErr: &apierrors.APIError{StatusCode: 403, Message: "remove snapshots before deleting policy"},
+	}
+	resp := runDelete(t, internalprovider.NewVolumeSnapshotScheduleResourceWithService(svc), volumeSnapshotScheduleConfig("policy-1", false))
+	if !resp.Diagnostics.HasError() || !svc.deleted {
+		t.Fatalf("delete diagnostics=%v deleted=%t", resp.Diagnostics, svc.deleted)
+	}
+	if !strings.Contains(fmt.Sprint(resp.Diagnostics), "remove snapshots before deleting policy") {
+		t.Fatalf("delete diagnostic does not preserve backend error: %v", resp.Diagnostics)
 	}
 }
 

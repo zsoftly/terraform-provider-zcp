@@ -13,6 +13,12 @@ to [Semantic Versioning](https://semver.org/).
   policies, including timing, timezone, retention, paused state, import, and
   scope checks.
 
+### Fixed
+
+- `zcp_volume_snapshot_schedule` verifies an incomplete create response before
+  saving the policy to state. A policy with unverified scope stays outside state
+  and reports recovery instructions, including the policy ID when available.
+
 ## [v1.0.0] - 2026-10-11
 
 ### Changed
