@@ -31,7 +31,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 1.0.0"
+      version = "~> 1.1.0"
     }
   }
 }
@@ -98,7 +98,7 @@ For SDK development, point a `go.work` file at a sibling `zcp-cli` checkout and
 keep it uncommitted. CI and releases build against the published
 `github.com/zsoftly/zcp-cli` module.
 
-The examples use provider v1.0.0.
+The examples use provider v1.1.0.
 
 ## Releasing
 

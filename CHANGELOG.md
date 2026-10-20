@@ -7,6 +7,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-10-19
+
 ### Added
 
 - `zcp_volume_snapshot_schedule` manages block storage snapshot scheduler
