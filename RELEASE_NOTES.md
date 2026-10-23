@@ -4,6 +4,9 @@ Provider v1.1.0 adds `zcp_volume_snapshot_schedule` for block storage volumes.
 It manages scheduled snapshots as Terraform state, including timing, timezone,
 retention, pause state, and scope.
 
+This release builds with Go 1.26.10, which fixes a certificate-verification
+vulnerability in `crypto/x509`.
+
 Replace `<existing-volume-slug>` with the slug of a volume that already exists
 in the selected region and project.
 

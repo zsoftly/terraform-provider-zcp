@@ -9,6 +9,11 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [v1.1.0] - 2026-10-23
 
+### Security
+
+- The provider now builds with Go 1.26.10, which fixes a reachable
+  certificate-verification vulnerability in `crypto/x509`.
+
 ### Added
 
 - `zcp_volume_snapshot_schedule` manages block storage snapshot scheduler

@@ -31,7 +31,7 @@ Before opening a pull request:
 
 ### Prerequisites
 
-- Go 1.26.0 or later (the repository selects toolchain 1.26.9 in `go.mod`)
+- Go 1.26.0 or later (the repository selects toolchain 1.26.10 in `go.mod`)
 - Terraform 1.0+ or OpenTofu 1.6+
 
 ### Local Dev Override
