@@ -11,10 +11,10 @@ to [Semantic Versioning](https://semver.org/).
 
 - Bucket default encryption through `zcp_object_storage_bucket_encryption`:
   SSE-S3 or service-managed SSE-KMS, import, and drift detection. Existing
-  objects stay unchanged. On Ceph RGW 20.2.0, ZCP CLI encrypted copy and move
-  use verified multipart copy. AWS CLI and other S3 clients must use multipart
-  copy or download and re-upload. The service refuses single-part copies
-  carrying SSE headers. Headerless copies do not inherit bucket defaults.
+  objects stay unchanged. On the ZCP object storage service, ZCP CLI encrypted
+  copy and move use verified multipart copy. AWS CLI and other S3 clients must
+  use multipart copy or download and re-upload. The service refuses single-part
+  copies carrying SSE headers. Headerless copies do not inherit bucket defaults.
   In-place re-encryption is unsupported.
 
 ## [v1.1.0] - 2026-10-23
@@ -346,8 +346,8 @@ Initial release. Built on the zcp-cli SDK v0.0.23.
   `zcp_remote_access_vpn`
 - Kubernetes: `zcp_kubernetes_cluster` with in-place version upgrade and plan
   scaling
-- DNS: `zcp_dns_domain`, `zcp_dns_record` (PowerDNS record sets addressed by
-  name and type)
+- DNS: `zcp_dns_domain`, `zcp_dns_record` (DNS record sets addressed by name and
+  type)
 - Object storage: `zcp_object_storage`, `zcp_object_storage_bucket`
 - Account and governance: `zcp_project`, `zcp_sub_user`, `zcp_role`,
   `zcp_budget_alert`

@@ -145,7 +145,7 @@ func (r *bucketConfigurationResource) Schema(_ context.Context, _ resource.Schem
 	a["max_age_seconds"] = schema.Int64Attribute{Computed: true}
 	switch r.kind {
 	case "encryption":
-		a["algorithm"] = schema.StringAttribute{Required: true, MarkdownDescription: "Default encryption for new uploads: AES256 (SSE-S3) or aws:kms (SSE-KMS). Existing objects stay unchanged. Ceph copies require explicit encryption headers."}
+		a["algorithm"] = schema.StringAttribute{Required: true, MarkdownDescription: "Default encryption for new uploads: AES256 (SSE-S3) or aws:kms (SSE-KMS). Existing objects stay unchanged. Object storage copies require explicit encryption headers."}
 		a["kms_key_id"] = schema.StringAttribute{Optional: true, MarkdownDescription: "Operator-provisioned, slash-free service-managed key ID. Required for aws:kms and omitted for AES256."}
 	case "versioning":
 		a["enabled"] = schema.BoolAttribute{Required: true, MarkdownDescription: "Whether object versioning is enabled.", PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()}}

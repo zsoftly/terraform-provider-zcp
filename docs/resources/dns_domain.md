@@ -53,8 +53,8 @@ terraform import zcp_dns_domain.example example-com
   forces replacement.
 - `region` (String) Region slug. Defaults to `default`, the single DNS region;
   compute regions are invalid here. Changing this forces replacement.
-- `dns_provider` (String) DNS backend for the zone. Defaults to `PowerDNS`.
-  Changing this forces replacement.
+- `dns_provider` (String) DNS provider backing the zone. Defaults to the
+  platform's default DNS provider. Changing this forces replacement.
 - `project` (String) Project slug. Inherits from the provider `default_project`
   if omitted. Changing this forces replacement.
 - `timeouts` (Block) Configurable `create` and `delete` timeouts.

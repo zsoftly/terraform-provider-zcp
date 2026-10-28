@@ -16,7 +16,7 @@ import (
 )
 
 // DNS create defaults. DNS is served by the dedicated "dns" cloud provider,
-// which has a single region ("default") and a PowerDNS backend — compute
+// which has a single region ("default") — compute
 // regions are invalid for DNS (verified live 2026-07-05). The CLI applies the
 // same defaults.
 const (
@@ -79,7 +79,7 @@ func (r *dnsDomainResource) Schema(ctx context.Context, _ resource.SchemaRequest
 			"dns_provider": schema.StringAttribute{
 				Optional:            true,
 				Computed:            true,
-				MarkdownDescription: "DNS provider backing the zone. Defaults to `" + defaultDNSProvider + "`. Changing this forces replacement.",
+				MarkdownDescription: "DNS provider backing the zone. Defaults to the platform's default DNS provider. Changing this forces replacement.",
 				PlanModifiers: []planmodifier.String{
 					stringplanmodifier.RequiresReplace(),
 					stringplanmodifier.UseStateForUnknown(),

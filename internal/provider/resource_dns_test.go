@@ -132,7 +132,7 @@ func createDNSDomain(t *testing.T, svc *fakeDNSService, name string) resource.Cr
 }
 
 func TestDNSDomainResource_createDefaultsDNSProvider(t *testing.T) {
-	// dns_provider is Optional+Computed with a PowerDNS default; when config
+	// dns_provider is Optional+Computed with a platform default; when config
 	// omits it, Create must record the resolved value so state is never left
 	// unknown and later refreshes cannot flip it to a different value.
 	svc := &fakeDNSService{
@@ -146,8 +146,8 @@ func TestDNSDomainResource_createDefaultsDNSProvider(t *testing.T) {
 	if diags := resp.State.GetAttribute(context.Background(), path.Root("dns_provider"), &provider); diags.HasError() {
 		t.Fatalf("reading dns_provider: %v", diags)
 	}
-	if provider.ValueString() != "PowerDNS" {
-		t.Errorf("dns_provider = %q, want PowerDNS", provider.ValueString())
+	if provider.ValueString() != internalprovider.DefaultDNSProvider {
+		t.Errorf("dns_provider = %q, want %q", provider.ValueString(), internalprovider.DefaultDNSProvider)
 	}
 }
 
@@ -205,7 +205,7 @@ func TestDNSDomainResource_createServiceError(t *testing.T) {
 
 func TestDNSDomainResource_readFound(t *testing.T) {
 	svc := &fakeDNSService{
-		domain: &dns.Domain{Slug: "example-com", Name: "example.com", DNSProvider: "PowerDNS", Status: true},
+		domain: &dns.Domain{Slug: "example-com", Name: "example.com", DNSProvider: internalprovider.DefaultDNSProvider, Status: true},
 	}
 	resp := readDNSDomain(t, svc, "example-com")
 	if resp.Diagnostics.HasError() {
@@ -218,8 +218,8 @@ func TestDNSDomainResource_readFound(t *testing.T) {
 	if got.Name.ValueString() != "example.com" {
 		t.Errorf("Name = %q, want %q", got.Name.ValueString(), "example.com")
 	}
-	if got.DNSProvider.ValueString() != "PowerDNS" {
-		t.Errorf("DNSProvider = %q, want %q", got.DNSProvider.ValueString(), "PowerDNS")
+	if got.DNSProvider.ValueString() != internalprovider.DefaultDNSProvider {
+		t.Errorf("DNSProvider = %q, want %q", got.DNSProvider.ValueString(), internalprovider.DefaultDNSProvider)
 	}
 }
 
