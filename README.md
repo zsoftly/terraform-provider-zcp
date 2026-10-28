@@ -21,7 +21,7 @@ configurations under [examples/](examples/).
 
 Bucket default encryption uses `zcp_object_storage_bucket_encryption` with
 `algorithm = "AES256"` (SSE-S3), or `algorithm = "aws:kms"` and `kms_key_id`
-(SSE-KMS). Regional gateway support is required. Existing objects stay
+(SSE-KMS). Confirm regional gateway support before use. Existing objects stay
 unchanged, and Ceph copies require explicit encryption headers. See the
 [bucket encryption resource](docs/resources/object_storage_bucket_encryption.md)
 for Terraform and OpenTofu examples, import, and limitations.

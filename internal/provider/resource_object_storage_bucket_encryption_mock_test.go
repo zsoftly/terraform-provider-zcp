@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -72,10 +73,11 @@ func TestBucketEncryptionMockLifecycle(t *testing.T) {
 	t.Setenv("TF_ACC_PROVIDER_HOST", "registry.terraform.io")
 	t.Setenv("ZCP_S3_ACCESS_KEY", "test-access")
 	t.Setenv("ZCP_S3_SECRET_KEY", "test-secret")
-	config := func(algorithm, key string) string {
+	emptyKey, kmsKey := "", "service-key"
+	config := func(algorithm string, key *string) string {
 		keyAttribute := ""
-		if key != "" {
-			keyAttribute = fmt.Sprintf("kms_key_id = %q", key)
+		if key != nil {
+			keyAttribute = fmt.Sprintf("kms_key_id = %q", *key)
 		}
 		return fmt.Sprintf(`
 terraform {
@@ -101,25 +103,29 @@ resource "zcp_object_storage_bucket_encryption" "test" {
 		CheckDestroy: func(_ *terraform.State) error {
 			mu.Lock()
 			defer mu.Unlock()
-			if configuration != "" || deletes == 0 || puts < 3 {
+			if configuration != "" || deletes == 0 || puts != 3 {
 				return fmt.Errorf("default not removed or writes missing: puts=%d deletes=%d", puts, deletes)
 			}
 			return nil
 		},
 		Steps: []resource.TestStep{
-			{Config: config("AES256", ""), Check: resource.ComposeTestCheckFunc(
+			{Config: config("AES256", &emptyKey), PlanOnly: true, ExpectError: regexp.MustCompile("kms_key_id must not be empty")},
+			{Config: config("AES256", nil), Check: resource.ComposeTestCheckFunc(
 				resource.TestCheckResourceAttr(name, "id", "assets-x1/media-b1"),
 				resource.TestCheckResourceAttr(name, "algorithm", "AES256"),
 				resource.TestCheckNoResourceAttr(name, "kms_key_id"),
 			)},
+			{Config: config("AES256", nil), PlanOnly: true},
+			{Config: config("AES256", &emptyKey), PlanOnly: true, ExpectError: regexp.MustCompile("kms_key_id must not be empty")},
+			{Config: config("AES256", nil), PlanOnly: true},
 			{ResourceName: name, ImportState: true, ImportStateVerify: true},
-			{Config: config("aws:kms", "service-key"), Check: resource.ComposeTestCheckFunc(
+			{Config: config("aws:kms", &kmsKey), Check: resource.ComposeTestCheckFunc(
 				resource.TestCheckResourceAttr(name, "algorithm", "aws:kms"),
 				resource.TestCheckResourceAttr(name, "kms_key_id", "service-key"),
 			)},
 			{ResourceName: name, ImportState: true, ImportStateVerify: true},
-			{PreConfig: func() { mu.Lock(); configuration = ""; mu.Unlock() }, Config: config("aws:kms", "service-key"), PlanOnly: true, ExpectNonEmptyPlan: true},
-			{Config: config("aws:kms", "service-key"), Check: func(_ *terraform.State) error {
+			{PreConfig: func() { mu.Lock(); configuration = ""; mu.Unlock() }, Config: config("aws:kms", &kmsKey), PlanOnly: true, ExpectNonEmptyPlan: true},
+			{Config: config("aws:kms", &kmsKey), Check: func(_ *terraform.State) error {
 				mu.Lock()
 				defer mu.Unlock()
 				if !strings.Contains(configuration, "<SSEAlgorithm>aws:kms</SSEAlgorithm>") || !strings.Contains(configuration, "<KMSMasterKeyID>service-key</KMSMasterKeyID>") {

@@ -35,6 +35,8 @@ func TestBucketEncryptionValidation(t *testing.T) {
 	}{
 		{"AES256", nil, false}, {"aws:kms", "service-key", false},
 		{"AES256", "key", true}, {"aws:kms", nil, true},
+		{"AES256", "", true}, {"aws:kms", "", true},
+		{tftypes.UnknownValue, "", true},
 		{"aws:kms", " ", true}, {"aws:kms", "mount/key", true},
 		{"invalid", nil, true}, {"", nil, true},
 		{tftypes.UnknownValue, nil, false}, {"aws:kms", tftypes.UnknownValue, false},
@@ -44,6 +46,9 @@ func TestBucketEncryptionValidation(t *testing.T) {
 			sch := bucketConfigurationSchema(t, "encryption")
 			var resp resource.ValidateConfigResponse
 			r.ValidateConfig(context.Background(), resource.ValidateConfigRequest{Config: tfsdk.Config{Schema: sch.Schema, Raw: encryptionRaw(t, tc.algorithm, tc.key)}}, &resp)
+			if tc.key == "" && (!resp.Diagnostics.HasError() || resp.Diagnostics.Errors()[0].Summary() != "Empty KMS key ID") {
+				t.Fatalf("missing empty-key diagnostic: %v", resp.Diagnostics)
+			}
 			if resp.Diagnostics.HasError() != tc.invalid {
 				t.Fatalf("diagnostics=%v, want error=%t", resp.Diagnostics, tc.invalid)
 			}

@@ -175,6 +175,10 @@ func (r *bucketConfigurationResource) ValidateConfig(ctx context.Context, req re
 	}
 	switch r.kind {
 	case "encryption":
+		if !m.KMSKeyID.IsNull() && !m.KMSKeyID.IsUnknown() && m.KMSKeyID.ValueString() == "" {
+			resp.Diagnostics.AddAttributeError(path.Root("kms_key_id"), "Empty KMS key ID", "kms_key_id must not be empty. For AES256, omit kms_key_id. For aws:kms, set a slash-free, service-managed key ID.")
+			return
+		}
 		if m.Algorithm.IsUnknown() || m.KMSKeyID.IsUnknown() {
 			return
 		}

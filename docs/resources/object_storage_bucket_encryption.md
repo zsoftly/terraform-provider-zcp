@@ -8,9 +8,9 @@ description: |-
 
 Manages bucket default encryption through the existing S3-compatible gateway.
 Set `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store
-before applying. These credentials follow the existing bucket configuration
-resources and are not stored in this resource's state. `kms_key_id` identifies
-an operator-provisioned key. It contains no encryption key material.
+before applying. The other bucket configuration resources use the same
+credentials. This resource does not store S3 credentials in state. `kms_key_id`
+identifies an operator-provisioned key. It contains no encryption key material.
 
 Confirm regional encryption support with ZCP support before use. This resource
 does not enable the gateway backend or announce availability in any region.
@@ -80,9 +80,9 @@ deleting existing data. Retain the underlying service-managed keys needed to
 read encrypted objects.
 
 Ceph RGW `CopyObject` does not apply the destination bucket's default
-encryption. Clients must send explicit SSE headers on copies requiring
-encryption. With the ZCP CLI, pass `--sse AES256` or
+encryption. You must send explicit SSE headers on every copy you need encrypted.
+With the ZCP CLI, pass `--sse AES256` or
 `--sse aws:kms --sse-kms-key-id <service-key-id>` on copy and move.
-[Ceph correction #72291](https://github.com/ceph/ceph/pull/72291) remains open
-as of October 28, 2026. In-place re-encryption is unsupported. This resource
-never copies, rewrites, or automatically re-encrypts existing objects.
+[Ceph pull request #72291](https://github.com/ceph/ceph/pull/72291) is still
+open as of October 28, 2026. In-place re-encryption is unsupported. This
+resource never copies, rewrites, or automatically re-encrypts existing objects.
