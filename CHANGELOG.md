@@ -11,8 +11,11 @@ to [Semantic Versioning](https://semver.org/).
 
 - Bucket default encryption through `zcp_object_storage_bucket_encryption`:
   SSE-S3 or service-managed SSE-KMS, import, and drift detection. Existing
-  objects stay unchanged. Ceph copies require explicit encryption headers;
-  in-place re-encryption is unsupported.
+  objects stay unchanged. On Ceph RGW 20.2.0, ZCP CLI encrypted copy and move
+  use verified multipart copy. AWS CLI and other S3 clients must use multipart
+  copy or download and re-upload. The service refuses single-part copies
+  carrying SSE headers. Headerless copies do not inherit bucket defaults.
+  In-place re-encryption is unsupported.
 
 ## [v1.1.0] - 2026-10-23
 

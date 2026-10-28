@@ -79,10 +79,19 @@ unchanged. Destroying this resource removes the default without decrypting or
 deleting existing data. Retain the underlying service-managed keys needed to
 read encrypted objects.
 
-Ceph RGW `CopyObject` does not apply the destination bucket's default
-encryption. You must send explicit SSE headers on every copy you need encrypted.
-With the ZCP CLI, pass `--sse AES256` or
-`--sse aws:kms --sse-kms-key-id <service-key-id>` on copy and move.
-[Ceph pull request #72291](https://github.com/ceph/ceph/pull/72291) is still
-open as of October 28, 2026. In-place re-encryption is unsupported. This
-resource never copies, rewrites, or automatically re-encrypts existing objects.
+On Ceph RGW 20.2.0, ZCP CLI encrypted copy and move use multipart copy and
+verify the destination algorithm and any requested KMS key ID with HEAD.
+Pass `--sse AES256` or `--sse aws:kms --sse-kms-key-id <service-key-id>` to
+select destination encryption. Without `--sse`, copies of encrypted sources
+preserve the source algorithm and KMS key. A move deletes the source only after
+verification succeeds. Empty encrypted copies use an encrypted PUT with the
+source metadata and the same HEAD verification.
+
+AWS CLI and other S3 clients must use multipart copy with destination encryption
+set at multipart initiation, or download and re-upload. Ceph RGW 20.2.0 ignores
+SSE on single-part copies from plaintext and rejects single-part copies from
+encrypted sources. The service refuses single-part copies carrying SSE headers.
+Headerless copies do not inherit the destination bucket default.
+
+In-place re-encryption is unsupported. This resource never copies, rewrites,
+or automatically re-encrypts existing objects.
