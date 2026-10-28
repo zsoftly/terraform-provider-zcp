@@ -76,6 +76,8 @@ func isConcurrentModification(err error) bool {
 }
 
 type bucketConfigurationModel struct {
+	Algorithm          types.String `tfsdk:"algorithm"`
+	KMSKeyID           types.String `tfsdk:"kms_key_id"`
 	ID                 types.String `tfsdk:"id"`
 	ObjectStorage      types.String `tfsdk:"object_storage"`
 	Bucket             types.String `tfsdk:"bucket"`
@@ -90,6 +92,10 @@ type bucketConfigurationModel struct {
 	AllowedMethods     types.List   `tfsdk:"allowed_methods"`
 	AllowedHeaders     types.List   `tfsdk:"allowed_headers"`
 	MaxAgeSeconds      types.Int64  `tfsdk:"max_age_seconds"`
+}
+
+func NewObjectStorageBucketEncryptionResource() resource.Resource {
+	return &bucketConfigurationResource{kind: "encryption"}
 }
 
 func NewObjectStorageBucketVersioningResource() resource.Resource {
@@ -124,6 +130,8 @@ func (r *bucketConfigurationResource) Schema(_ context.Context, _ resource.Schem
 	a := bucketConfigurationAttributes()
 	// The shared model has one field set for every configuration type. Attributes
 	// outside this resource's concern are computed-only and remain null.
+	a["algorithm"] = schema.StringAttribute{Computed: true}
+	a["kms_key_id"] = schema.StringAttribute{Computed: true}
 	a["enabled"] = schema.BoolAttribute{Computed: true}
 	a["policy"] = schema.StringAttribute{Computed: true}
 	a["tags"] = schema.MapAttribute{Computed: true, ElementType: types.StringType}
@@ -136,6 +144,9 @@ func (r *bucketConfigurationResource) Schema(_ context.Context, _ resource.Schem
 	a["allowed_headers"] = schema.ListAttribute{Computed: true, ElementType: types.StringType}
 	a["max_age_seconds"] = schema.Int64Attribute{Computed: true}
 	switch r.kind {
+	case "encryption":
+		a["algorithm"] = schema.StringAttribute{Required: true, MarkdownDescription: "Default encryption for new uploads: AES256 (SSE-S3) or aws:kms (SSE-KMS). Existing objects stay unchanged. Ceph copies require explicit encryption headers."}
+		a["kms_key_id"] = schema.StringAttribute{Optional: true, MarkdownDescription: "Operator-provisioned, slash-free service-managed key ID. Required for aws:kms and omitted for AES256."}
 	case "versioning":
 		a["enabled"] = schema.BoolAttribute{Required: true, MarkdownDescription: "Whether object versioning is enabled.", PlanModifiers: []planmodifier.Bool{boolplanmodifier.UseStateForUnknown()}}
 	case "policy":
@@ -163,6 +174,13 @@ func (r *bucketConfigurationResource) ValidateConfig(ctx context.Context, req re
 		return
 	}
 	switch r.kind {
+	case "encryption":
+		if m.Algorithm.IsUnknown() || m.KMSKeyID.IsUnknown() {
+			return
+		}
+		if err := (objectstorage.EncryptionOptions{Algorithm: m.Algorithm.ValueString(), KMSKeyID: m.KMSKeyID.ValueString()}).Validate(); err != nil || m.Algorithm.ValueString() == "" {
+			resp.Diagnostics.AddError("Invalid bucket encryption", "Use AES256 without kms_key_id, or aws:kms with a nonempty, slash-free service-managed kms_key_id.")
+		}
 	case "lifecycle":
 		if m.Days.IsUnknown() || m.NoncurrentDays.IsUnknown() || m.AbortMultipartDays.IsUnknown() {
 			return
@@ -294,6 +312,10 @@ func (r *bucketConfigurationResource) Read(ctx context.Context, req resource.Rea
 		resp.Diagnostics.AddError("Failed to read bucket configuration", err.Error())
 		return
 	}
+	if r.kind == "encryption" && m.Algorithm.IsNull() {
+		resp.State.RemoveResource(ctx)
+		return
+	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
 }
 
@@ -318,6 +340,10 @@ func (r *bucketConfigurationResource) Update(ctx context.Context, req resource.U
 }
 
 func (r *bucketConfigurationResource) clearUnused(m *bucketConfigurationModel) {
+	if r.kind != "encryption" {
+		m.Algorithm = types.StringNull()
+		m.KMSKeyID = types.StringNull()
+	}
 	if r.kind != "versioning" {
 		m.Enabled = types.BoolNull()
 	}
@@ -361,6 +387,8 @@ func (r *bucketConfigurationResource) Delete(ctx context.Context, req resource.D
 	}
 	deleteErr := withBucketConfigurationWrite(ctx, m.ObjectStorage.ValueString(), m.Bucket.ValueString(), func() error {
 		switch r.kind {
+		case "encryption":
+			return r.svc.DisableBucketEncryption(ctx, m.ObjectStorage.ValueString(), name)
 		case "versioning":
 			return r.svc.SetBucketVersioning(ctx, m.ObjectStorage.ValueString(), name, false)
 		case "policy":
@@ -393,6 +421,8 @@ func (r *bucketConfigurationResource) ImportState(ctx context.Context, req resou
 func (r *bucketConfigurationResource) apply(ctx context.Context, m *bucketConfigurationModel, name string) error {
 	store := m.ObjectStorage.ValueString()
 	switch r.kind {
+	case "encryption":
+		return r.svc.SetBucketEncryption(ctx, store, name, objectstorage.EncryptionOptions{Algorithm: m.Algorithm.ValueString(), KMSKeyID: m.KMSKeyID.ValueString()})
 	case "versioning":
 		return r.svc.SetBucketVersioning(ctx, store, name, m.Enabled.ValueBool())
 	case "policy":
@@ -428,6 +458,19 @@ func (r *bucketConfigurationResource) apply(ctx context.Context, m *bucketConfig
 func (r *bucketConfigurationResource) read(ctx context.Context, m *bucketConfigurationModel, name string) error {
 	store := m.ObjectStorage.ValueString()
 	switch r.kind {
+	case "encryption":
+		configuration, err := r.svc.GetBucketEncryption(ctx, store, name)
+		if err != nil {
+			return err
+		}
+		m.Algorithm = types.StringNull()
+		m.KMSKeyID = types.StringNull()
+		if configuration.Algorithm != "" {
+			m.Algorithm = types.StringValue(configuration.Algorithm)
+		}
+		if configuration.KMSKeyID != "" {
+			m.KMSKeyID = types.StringValue(configuration.KMSKeyID)
+		}
 	case "versioning":
 		status, err := r.svc.GetBucketVersioning(ctx, store, name)
 		if err != nil {

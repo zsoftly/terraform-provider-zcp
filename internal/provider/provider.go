@@ -145,6 +145,7 @@ func (p *ZCPProvider) Resources(_ context.Context) []func() resource.Resource {
 		NewObjectStorageResource,
 		NewObjectStorageKeyResource,
 		NewObjectStorageBucketResource,
+		NewObjectStorageBucketEncryptionResource,
 		NewObjectStorageBucketVersioningResource,
 		NewObjectStorageBucketPolicyResource,
 		NewObjectStorageBucketTaggingResource,

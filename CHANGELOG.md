@@ -7,6 +7,13 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- Bucket default encryption through `zcp_object_storage_bucket_encryption`:
+  SSE-S3 or service-managed SSE-KMS, import, and drift detection. Existing
+  objects stay unchanged. Ceph copies require explicit encryption headers;
+  in-place re-encryption is unsupported.
+
 ## [v1.1.0] - 2026-10-23
 
 ### Security
