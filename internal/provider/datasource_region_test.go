@@ -107,7 +107,7 @@ func TestRegionDataSource_found(t *testing.T) {
 }
 
 // When the API returns a region without a cloud_provider (nil), cloud_provider is "".
-// The object-storage regions (os-yow, os-yul) use the "ceph" provider; the DNS
+// The object-storage regions (os-yow, os-yul) use a dedicated object-storage provider; the DNS
 // region uses "dns". Only compute regions (yow-1, yul-1) use "nimbo".
 func TestRegionDataSource_nilCloudProvider(t *testing.T) {
 	lister := &fakeRegionLister{

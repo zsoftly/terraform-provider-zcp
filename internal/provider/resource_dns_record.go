@@ -24,7 +24,7 @@ var _ resource.ResourceWithImportState = &dnsRecordResource{}
 var _ resource.ResourceWithValidateConfig = &dnsRecordResource{}
 
 // dnsRecordDeleter removes an RRset by name and type. The live DNS API models
-// records as PowerDNS RRsets without numeric IDs (verified 2026-07-05), so
+// records as RRsets without numeric IDs (verified 2026-07-05), so
 // deletion goes through the SDK's DeleteRecordByName rather than the
 // record_id-based DeleteRecord, which cannot work against the live API.
 // *dns.Service satisfies this interface as of zcp-cli v0.0.22.

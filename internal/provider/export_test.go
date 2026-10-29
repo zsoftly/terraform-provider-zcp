@@ -440,3 +440,7 @@ func NewLoadBalancerDataSourceWithGetter(g loadBalancerGetter) datasource.DataSo
 func NewPermissionsDataSourceWithLister(l permissionLister) datasource.DataSource {
 	return &permissionsDataSource{svc: l}
 }
+
+// DefaultDNSProvider exposes the DNS provider applied when dns_provider is
+// omitted; available only in test binaries.
+const DefaultDNSProvider = defaultDNSProvider

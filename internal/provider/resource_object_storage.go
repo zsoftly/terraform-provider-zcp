@@ -47,6 +47,9 @@ type objectStorageServiceIface interface {
 	DeleteBucketLifecycle(ctx context.Context, slug, bucketName string) error
 	SetBucketCORS(ctx context.Context, slug, bucketName string, origins, methods, headers []string, maxAgeSeconds int) error
 	GetBucketCORS(ctx context.Context, slug, bucketName string) (string, error)
+	GetBucketEncryption(ctx context.Context, slug, bucketName string) (objectstorage.EncryptionOptions, error)
+	SetBucketEncryption(ctx context.Context, slug, bucketName string, encryption objectstorage.EncryptionOptions) error
+	DisableBucketEncryption(ctx context.Context, slug, bucketName string) error
 	DeleteBucketCORS(ctx context.Context, slug, bucketName string) error
 }
 

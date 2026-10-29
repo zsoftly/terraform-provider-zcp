@@ -27,6 +27,10 @@ import (
 
 // fakeObjectStorageService satisfies objectStorageServiceIface.
 type fakeObjectStorageService struct {
+	encryption       objectstorage.EncryptionOptions
+	encryptionErr    error
+	encryptionBucket string
+
 	store          *objectstorage.ObjectStorage
 	created        *objectstorage.ObjectStorage
 	createdReq     *objectstorage.CreateRequest
@@ -1234,4 +1238,25 @@ func TestObjectStorageResource_validateConfig(t *testing.T) {
 	if resp := run("", tftypes.NewValue(tftypes.Number, tftypes.UnknownValue)); resp.Diagnostics.HasError() {
 		t.Errorf("unknown size_gb: unexpected error: %v", resp.Diagnostics)
 	}
+}
+
+func (f *fakeObjectStorageService) GetBucketEncryption(_ context.Context, _, bucket string) (objectstorage.EncryptionOptions, error) {
+	f.encryptionBucket = bucket
+	return f.encryption, f.encryptionErr
+}
+func (f *fakeObjectStorageService) SetBucketEncryption(_ context.Context, _, bucket string, encryption objectstorage.EncryptionOptions) error {
+	f.encryptionBucket = bucket
+	if f.encryptionErr != nil {
+		return f.encryptionErr
+	}
+	f.encryption = encryption
+	return nil
+}
+func (f *fakeObjectStorageService) DisableBucketEncryption(_ context.Context, _, bucket string) error {
+	f.encryptionBucket = bucket
+	if f.encryptionErr != nil {
+		return f.encryptionErr
+	}
+	f.encryption = objectstorage.EncryptionOptions{}
+	return nil
 }

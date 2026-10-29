@@ -16,8 +16,19 @@ store's S3-compatible gateway through the same SDK. The SDK resolves the gateway
 endpoint from the selected object-storage instance, without a hardcoded regional
 endpoint. The provider uses the [zcp CLI](https://github.com/zsoftly/zcp-cli).
 
-46 resources and 14 data sources. Full reference under [docs/](docs/), runnable
+47 resources and 14 data sources. Full reference under [docs/](docs/), runnable
 configurations under [examples/](examples/).
+
+Bucket default encryption uses `zcp_object_storage_bucket_encryption` with
+`algorithm = "AES256"` (SSE-S3), or `algorithm = "aws:kms"` and `kms_key_id`
+(SSE-KMS). Confirm regional gateway support before use. Existing objects stay
+unchanged. On the ZCP object storage service, ZCP CLI encrypted copy and move
+use verified multipart copy. AWS CLI and other S3 clients must use multipart
+copy or download and re-upload. The service refuses single-part copies carrying
+SSE headers. Headerless copies do not inherit the destination bucket default.
+See the
+[bucket encryption resource](docs/resources/object_storage_bucket_encryption.md)
+for Terraform and OpenTofu examples, import, and limitations.
 
 ## Requirements
 
