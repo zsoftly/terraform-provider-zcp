@@ -1,52 +1,52 @@
-# terraform-provider-zcp v1.1.0 Release Notes
+# terraform-provider-zcp v1.2.0 Release Notes
 
-Provider v1.1.0 adds `zcp_volume_snapshot_schedule` for block storage volumes.
-It manages scheduled snapshots as Terraform state, including timing, timezone,
-retention, pause state, and scope.
+Provider v1.2.0 adds `zcp_object_storage_bucket_encryption`, which manages a
+bucket's default server-side encryption as Terraform or OpenTofu state. New
+uploads to the bucket are encrypted with SSE-S3 or with a service-managed
+SSE-KMS key. Existing objects and versions stay unchanged.
 
-This release builds with Go 1.26.10, which fixes a certificate-verification
-vulnerability in `crypto/x509`.
+Set `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store
+before applying. The other bucket configuration resources use the same
+credentials, and the resource does not store them in state.
 
-Replace `<existing-volume-slug>` with the slug of a volume that already exists
-in the selected region and project.
+For SSE-S3, omit `kms_key_id`:
 
 ```hcl
-data "zcp_region" "yul" {
-  slug = "yul-1"
-}
-
-resource "zcp_volume_snapshot_schedule" "data" {
-  volume    = "<existing-volume-slug>"
-  interval  = "dailyAt"
-  at        = "02:00"
-  timezone  = "America/Toronto"
-  retention = 7
-  region    = data.zcp_region.yul.slug
+resource "zcp_object_storage_bucket_encryption" "assets" {
+  object_storage = zcp_object_storage.assets.id
+  bucket         = zcp_object_storage_bucket.assets.id
+  algorithm      = "AES256"
 }
 ```
 
-Use `hourly`, `dailyAt`, `weeklyOn`, or `monthlyOn` for `interval`. Set `day` to
-`0` through `6` for a weekly schedule or `1` through `28` for a monthly
-schedule. `at` accepts whole hours in `HH:00` format.
+For SSE-KMS, set `algorithm = "aws:kms"` and supply the service-managed key ID:
 
-Import with `<id>/<region>[/<project>]`:
+```hcl
+resource "zcp_object_storage_bucket_encryption" "assets" {
+  object_storage = zcp_object_storage.assets.id
+  bucket         = zcp_object_storage_bucket.assets.id
+  algorithm      = "aws:kms"
+  kms_key_id     = var.kms_key_id
+}
+```
+
+Import with `<store-slug>/<bucket-slug>`. If someone removes the default outside
+Terraform or OpenTofu, the next plan recreates it.
 
 ```bash
-terraform import zcp_volume_snapshot_schedule.data policy-1/yul-1
+terraform import zcp_object_storage_bucket_encryption.assets assets-x1/media-b1
 ```
 
-The first apply after import records the configured `immediate` value without
-replacing the schedule or creating a snapshot. Later changes to `immediate`,
-`name`, or `description` replace the schedule. The platform rejects deletion
-while snapshots remain, so remove those snapshots first. Pause a schedule when
-you need to keep its snapshots but stop future runs.
+Destroying the resource removes the default without decrypting or deleting any
+data. Encryption depends on the region's key management service, so check
+availability with ZCP support before you rely on it.
 
-For an incomplete create response with a policy ID, the provider reads the
-policy back and verifies its scope before saving it to state. It refuses a
-policy with conflicting scope without reading it back and provides recovery
-steps instead of managing a possibly different schedule.
+A copy made without encryption settings does not pick up the bucket default.
+For encrypted copies, use `zcp object-storage object copy --sse`, or a multipart
+copy in other S3 clients. The service refuses a single-request copy that asks
+for encryption. The provider builds against zcp-cli v1.2.0.
 
 ## Upgrade
 
-Set the provider constraint to `~> 1.1.0`, then run `terraform init -upgrade` or
+Set the provider constraint to `~> 1.2.0`, then run `terraform init -upgrade` or
 `tofu init -upgrade`. Review the plan before applying it.
