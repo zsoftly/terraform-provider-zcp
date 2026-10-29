@@ -7,6 +7,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.2.0] - 2026-10-29
+
 ### Added
 
 - Bucket default encryption through `zcp_object_storage_bucket_encryption`:
