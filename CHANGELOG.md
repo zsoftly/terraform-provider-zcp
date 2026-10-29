@@ -17,6 +17,10 @@ to [Semantic Versioning](https://semver.org/).
   copies carrying SSE headers. Headerless copies do not inherit bucket defaults.
   In-place re-encryption is unsupported.
 
+### Changed
+
+- The provider now builds against zcp-cli v1.2.0.
+
 ## [v1.1.0] - 2026-10-23
 
 ### Security
