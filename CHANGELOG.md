@@ -7,6 +7,12 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+
+- The provider can use a selected or active ZCP CLI profile when no provider or
+  environment bearer token is set. Set `profile` or `ZCP_PROFILE` to select a
+  profile.
+
 ## [v1.2.0] - 2026-10-29
 
 ### Added

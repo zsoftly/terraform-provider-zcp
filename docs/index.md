@@ -88,9 +88,14 @@ correct registry address. The Makefile handles this:
 
 ## Authentication
 
-Set `ZCP_BEARER_TOKEN` in your environment. No HCL attribute is required.
-Optionally set `ZCP_API_URL` to override the endpoint and `ZCP_PROJECT` to set a
-default project. Get the bearer token from the
+Set `ZCP_BEARER_TOKEN` in your environment. No HCL attribute is required. If
+neither `bearer_token` nor `ZCP_BEARER_TOKEN` is set, the provider uses the ZCP
+CLI profile selected by `profile` or `ZCP_PROFILE`. When neither selector is
+set, the provider uses the active CLI profile.
+The provider uses an available profile's API URL and default project. The
+profile's bearer token is used only after `bearer_token` and `ZCP_BEARER_TOKEN`.
+Optionally set `ZCP_API_URL` to override the endpoint and `ZCP_PROJECT` to set
+a default project. Get the bearer token from the
 [ZCP console](https://cloud.zcp.zsoftly.ca) under **Account → API Keys**.
 
 ```bash
@@ -103,8 +108,14 @@ export ZCP_PROJECT="default"   # optional
 ### Optional
 
 - `bearer_token` (String, Sensitive) ZCP API bearer token. Supply the token
-  through this attribute or the `ZCP_BEARER_TOKEN` environment variable.
+  through this attribute or the `ZCP_BEARER_TOKEN` environment variable. It
+  takes precedence over all other credential sources.
 - `api_url` (String) ZCP API base URL. Defaults to
   `https://api.zcp.zsoftly.ca/api`. May also be set via `ZCP_API_URL`.
 - `default_project` (String) Default project slug applied to resources that omit
   a project. May also be set via `ZCP_PROJECT`.
+- `profile` (String) ZCP CLI profile whose API URL and default project apply.
+  The profile's bearer token is used after `bearer_token` and
+  `ZCP_BEARER_TOKEN`. May also be set via `ZCP_PROFILE`. An explicitly selected
+  profile must exist. The provider never switches credential sources after the
+  API rejects one.

@@ -84,10 +84,19 @@ resource "zcp_instance" "web" {
 | `bearer_token`     | `ZCP_BEARER_TOKEN`   | API bearer token (required)                   |
 | `api_url`          | `ZCP_API_URL`        | API base URL, defaults to the public endpoint |
 | `default_project`  | `ZCP_PROJECT`        | Project applied when a resource omits one     |
+| `profile`          | `ZCP_PROFILE`        | CLI profile for endpoint, project, and fallback token |
 
 Generate the token in the [ZCP console](https://cloud.zcp.zsoftly.ca) under
 **Account → API Keys**. Prefer the environment variable for the token so it
 stays out of state and version control.
+
+When the provider has no `bearer_token` and `ZCP_BEARER_TOKEN` is unset, it
+uses the selected ZCP CLI profile. Set `profile` or `ZCP_PROFILE` to select one.
+Otherwise, the provider uses the CLI's active profile. When a profile is
+selected, the provider reads its API URL and default project. Credential
+precedence is `bearer_token`, `ZCP_BEARER_TOKEN`, then the CLI profile's bearer token. A
+selected profile must exist even when `ZCP_BEARER_TOKEN` is set. If the selected
+credential is rejected by the API, the provider does not try another credential.
 
 ## Development
 
