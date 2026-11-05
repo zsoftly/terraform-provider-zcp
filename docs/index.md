@@ -19,7 +19,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "registry.opentofu.org/zsoftly/zcp"
-      version = "~> 1.1.0"
+      version = "~> 1.3.0"
     }
   }
 }
@@ -37,7 +37,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "registry.terraform.io/zsoftly/zcp"
-      version = "~> 1.1.0"
+      version = "~> 1.3.0"
     }
   }
 }
@@ -50,9 +50,9 @@ provider "zcp" {
 
 ## Local Development
 
-The examples use provider v1.1.0, which includes separate Kubernetes node and
-storage plans, VM backup schedules, plan tags, and block storage snapshot
-schedules.
+The examples use the provider v1.3.x series, which includes CLI profile
+authentication, separate Kubernetes node and storage plans, VM backup schedules,
+plan tags, and block storage snapshot schedules.
 
 During development, use `dev_overrides` instead of a registry install. A single
 binary works for both CLIs via config.
@@ -91,12 +91,12 @@ correct registry address. The Makefile handles this:
 Set `ZCP_BEARER_TOKEN` in your environment. No HCL attribute is required. If
 neither `bearer_token` nor `ZCP_BEARER_TOKEN` is set, the provider uses the ZCP
 CLI profile selected by `profile` or `ZCP_PROFILE`. When neither selector is
-set, the provider uses the active CLI profile.
-The provider uses an available profile's API URL and default project. The
-profile's bearer token is used only after `bearer_token` and `ZCP_BEARER_TOKEN`.
-Optionally set `ZCP_API_URL` to override the endpoint and `ZCP_PROJECT` to set
-a default project. Get the bearer token from the
-[ZCP console](https://cloud.zcp.zsoftly.ca) under **Account → API Keys**.
+set, the provider uses the active CLI profile. The provider uses an available
+profile's API URL and default project. The profile's bearer token is used only
+after `bearer_token` and `ZCP_BEARER_TOKEN`. Optionally set `ZCP_API_URL` to
+override the endpoint and `ZCP_PROJECT` to set a default project. Get the bearer
+token from the [ZCP console](https://cloud.zcp.zsoftly.ca) under **Account → API
+Keys**.
 
 ```bash
 export ZCP_BEARER_TOKEN="<your-token>"

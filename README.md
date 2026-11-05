@@ -42,7 +42,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 1.2.0"
+      version = "~> 1.3.0"
     }
   }
 }
@@ -77,30 +77,29 @@ resource "zcp_instance" "web" {
 }
 ```
 
-This constraint selects the latest released provider series. CLI profile
-authentication is unreleased. Use a provider build containing this change until
-the next provider version is published.
+This constraint selects the latest provider series.
 
 ### Authentication
 
-| Provider attribute | Environment variable | Purpose                                       |
-| ------------------ | -------------------- | --------------------------------------------- |
-| `bearer_token`     | `ZCP_BEARER_TOKEN`   | API bearer token (required)                   |
-| `api_url`          | `ZCP_API_URL`        | API base URL, defaults to the public endpoint |
-| `default_project`  | `ZCP_PROJECT`        | Project applied when a resource omits one     |
+| Provider attribute | Environment variable | Purpose                                               |
+| ------------------ | -------------------- | ----------------------------------------------------- |
+| `bearer_token`     | `ZCP_BEARER_TOKEN`   | API bearer token (required)                           |
+| `api_url`          | `ZCP_API_URL`        | API base URL, defaults to the public endpoint         |
+| `default_project`  | `ZCP_PROJECT`        | Project applied when a resource omits one             |
 | `profile`          | `ZCP_PROFILE`        | CLI profile for endpoint, project, and fallback token |
 
 Generate the token in the [ZCP console](https://cloud.zcp.zsoftly.ca) under
 **Account → API Keys**. Prefer the environment variable for the token so it
 stays out of state and version control.
 
-When the provider has no `bearer_token` and `ZCP_BEARER_TOKEN` is unset, it
-uses the selected ZCP CLI profile. Set `profile` or `ZCP_PROFILE` to select one.
+When the provider has no `bearer_token` and `ZCP_BEARER_TOKEN` is unset, it uses
+the selected ZCP CLI profile. Set `profile` or `ZCP_PROFILE` to select one.
 Otherwise, the provider uses the CLI's active profile. When a profile is
 selected, the provider reads its API URL and default project. Credential
-precedence is `bearer_token`, `ZCP_BEARER_TOKEN`, then the CLI profile's bearer token. A
-selected profile must exist even when `ZCP_BEARER_TOKEN` is set. If the selected
-credential is rejected by the API, the provider does not try another credential.
+precedence is `bearer_token`, `ZCP_BEARER_TOKEN`, then the CLI profile's bearer
+token. A selected profile must exist even when `ZCP_BEARER_TOKEN` is set. If the
+selected credential is rejected by the API, the provider does not try another
+credential.
 
 ## Development
 
@@ -122,7 +121,7 @@ For SDK development, point a `go.work` file at a sibling `zcp-cli` checkout and
 keep it uncommitted. CI and releases build against the published
 `github.com/zsoftly/zcp-cli` module.
 
-The `examples/provider` version constraint selects the v1.1.x series.
+The `examples/provider` version constraint selects the v1.3.x series.
 
 ## Releasing
 

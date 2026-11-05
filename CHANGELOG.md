@@ -7,6 +7,8 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.3.0] - 2026-11-05
+
 ### Added
 
 - The provider can use a selected or active ZCP CLI profile when no provider or

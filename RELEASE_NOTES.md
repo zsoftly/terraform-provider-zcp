@@ -1,52 +1,28 @@
-# terraform-provider-zcp v1.2.0 Release Notes
+# terraform-provider-zcp v1.3.0 Release Notes
 
-Provider v1.2.0 adds `zcp_object_storage_bucket_encryption`, which manages a
-bucket's default server-side encryption as Terraform or OpenTofu state. New
-uploads to the bucket are encrypted with SSE-S3 or with a service-managed
-SSE-KMS key. Existing objects and versions stay unchanged.
+Provider v1.3.0 adds ZCP CLI profile authentication and builds against
+`github.com/zsoftly/zcp-cli` v1.3.0. A provider can use a named CLI profile
+through `profile` or `ZCP_PROFILE`. When neither is set, it uses the active CLI
+profile.
 
-Set `ZCP_S3_ACCESS_KEY` and `ZCP_S3_SECRET_KEY` to an active key for the store
-before applying. The other bucket configuration resources use the same
-credentials, and the resource does not store them in state.
-
-For SSE-S3, omit `kms_key_id`:
-
-```hcl
-resource "zcp_object_storage_bucket_encryption" "assets" {
-  object_storage = zcp_object_storage.assets.id
-  bucket         = zcp_object_storage_bucket.assets.id
-  algorithm      = "AES256"
-}
-```
-
-For SSE-KMS, set `algorithm = "aws:kms"` and supply the service-managed key ID:
+The selected profile supplies the API URL and default project. Bearer-token
+precedence is `bearer_token`, `ZCP_BEARER_TOKEN`, then the profile token. An
+explicitly selected profile must exist. The provider reports unknown provider
+configuration values instead of falling back to environment or profile values.
+It does not try another credential when the selected credential is rejected.
 
 ```hcl
-resource "zcp_object_storage_bucket_encryption" "assets" {
-  object_storage = zcp_object_storage.assets.id
-  bucket         = zcp_object_storage_bucket.assets.id
-  algorithm      = "aws:kms"
-  kms_key_id     = var.kms_key_id
+provider "zcp" {
+  profile = "development"
 }
 ```
-
-Import with `<store-slug>/<bucket-slug>`. If someone removes the default outside
-Terraform or OpenTofu, the next plan recreates it.
-
-```bash
-terraform import zcp_object_storage_bucket_encryption.assets assets-x1/media-b1
-```
-
-Destroying the resource removes the default without decrypting or deleting any
-data. Encryption depends on the region's key management service, so check
-availability with ZCP support before you rely on it.
-
-A copy made without encryption settings does not pick up the bucket default.
-For encrypted copies, use `zcp object-storage object copy --sse`, or a multipart
-copy in other S3 clients. The service refuses a single-request copy that asks
-for encryption. The provider builds against zcp-cli v1.2.0.
 
 ## Upgrade
 
-Set the provider constraint to `~> 1.2.0`, then run `terraform init -upgrade` or
-`tofu init -upgrade`. Review the plan before applying it.
+Set the provider constraint to `~> 1.3.0`, then install the release with the
+same workflow used for prior versions:
+
+Run `terraform init -upgrade` for Terraform or `tofu init -upgrade` for
+OpenTofu.
+
+Review the plan before applying changes.
