@@ -254,6 +254,78 @@ profiles: {}
 	}
 }
 
+func TestProviderConfigure_staleActiveProfileBlocksEmptyProviderToken(t *testing.T) {
+	writeCLIConfig(t, `active_profile: removed
+profiles: {}
+`)
+	t.Setenv("ZCP_BEARER_TOKEN", "")
+
+	resp := configureWith(t, strPtr(""), nil, nil, nil)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected stale active profile to block an empty provider token")
+	}
+	if got := resp.Diagnostics.Errors()[0].Summary(); got != "Invalid active ZCP CLI profile" {
+		t.Fatalf("unexpected error summary: %q", got)
+	}
+}
+
+func TestProviderConfigure_environmentAPIURLOverridesActiveProfile(t *testing.T) {
+	profileCalled := false
+	profileServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		profileCalled = true
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer profileServer.Close()
+	environmentCalled := false
+	environmentServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		environmentCalled = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer environmentServer.Close()
+
+	writeCLIConfig(t, fmt.Sprintf(`active_profile: development
+profiles:
+  development:
+    bearer_token: profile-token
+    api_url: %s
+    project: profile-project
+`, profileServer.URL))
+	t.Setenv("ZCP_BEARER_TOKEN", "environment-token")
+	t.Setenv("ZCP_API_URL", environmentServer.URL)
+
+	resp := configureWith(t, nil, nil, nil, nil)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	pd := resp.ResourceData.(*internalprovider.ProviderData)
+	if err := pd.Client.Get(context.Background(), "/", nil, nil); err != nil {
+		t.Fatalf("calling environment API URL: %v", err)
+	}
+	if !environmentCalled || profileCalled {
+		t.Fatalf("environmentCalled = %t, profileCalled = %t, want true and false", environmentCalled, profileCalled)
+	}
+}
+
+func TestProviderConfigure_environmentProjectOverridesActiveProfile(t *testing.T) {
+	writeCLIConfig(t, `active_profile: development
+profiles:
+  development:
+    bearer_token: profile-token
+    project: profile-project
+`)
+	t.Setenv("ZCP_BEARER_TOKEN", "environment-token")
+	t.Setenv("ZCP_PROJECT", "environment-project")
+
+	resp := configureWith(t, nil, nil, nil, nil)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected error: %v", resp.Diagnostics)
+	}
+	pd := resp.ResourceData.(*internalprovider.ProviderData)
+	if pd.DefaultProject != "environment-project" {
+		t.Fatalf("DefaultProject = %q, want environment project", pd.DefaultProject)
+	}
+}
+
 func TestProviderConfigure_malformedCLIConfigBlocksEnvironmentToken(t *testing.T) {
 	const secret = "SECRET123"
 	writeCLIConfig(t, "active_profile: bearer_token\nprofiles:\n  bearer_token: "+secret+"\n")

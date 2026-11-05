@@ -131,7 +131,7 @@ func (p *ZCPProvider) Configure(ctx context.Context, req provider.ConfigureReque
 		if err != nil {
 			// A configured token remains usable when an old CLI configuration
 			// refers to a profile that has since been removed.
-			hasConfiguredToken := (!config.BearerToken.IsNull() && !config.BearerToken.IsUnknown()) || os.Getenv("ZCP_BEARER_TOKEN") != ""
+			hasConfiguredToken := (!config.BearerToken.IsNull() && !config.BearerToken.IsUnknown() && config.BearerToken.ValueString() != "") || os.Getenv("ZCP_BEARER_TOKEN") != ""
 			if !hasConfiguredToken || !errors.Is(err, errActiveCLIProfileNotFound) {
 				resp.Diagnostics.AddError("Invalid active ZCP CLI profile", err.Error())
 				return

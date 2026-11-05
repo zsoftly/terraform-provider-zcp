@@ -42,7 +42,7 @@ terraform {
   required_providers {
     zcp = {
       source  = "zsoftly/zcp"
-      version = "~> 1.1.0"
+      version = "~> 1.2.0"
     }
   }
 }
@@ -76,6 +76,10 @@ resource "zcp_instance" "web" {
   region            = data.zcp_region.yow.slug
 }
 ```
+
+This constraint selects the latest released provider series. CLI profile
+authentication is unreleased. Use a provider build containing this change until
+the next provider version is published.
 
 ### Authentication
 
@@ -118,7 +122,7 @@ For SDK development, point a `go.work` file at a sibling `zcp-cli` checkout and
 keep it uncommitted. CI and releases build against the published
 `github.com/zsoftly/zcp-cli` module.
 
-The examples use provider v1.1.0.
+The `examples/provider` version constraint selects the v1.1.x series.
 
 ## Releasing
 
