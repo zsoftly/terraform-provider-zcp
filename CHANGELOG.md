@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.3.0] - 2026-11-05
+
+### Added
+
+- The provider can use a selected or active ZCP CLI profile when no provider or
+  environment bearer token is set. Set `profile` or `ZCP_PROFILE` to select a
+  profile. Profiles can also supply the API URL and default project.
+
+### Changed
+
+- The provider now builds against zcp-cli v1.3.0.
+- Unknown provider configuration values and explicitly selected missing profiles
+  now return errors instead of falling back to another credential, endpoint, or
+  project. Malformed profile errors do not expose token contents.
+
 ## [v1.2.0] - 2026-10-29
 
 ### Added
