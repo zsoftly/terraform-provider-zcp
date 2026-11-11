@@ -7,6 +7,21 @@ to [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [v1.3.1] - 2026-11-10
+
+### Fixed
+
+- `zcp_network_acl` no longer loses ACLs in a VPC with more than one page of
+  ACLs (10 by default). Refresh read only the first page of the VPC's ACL list.
+  It removed older ACLs from state, though they still existed. The next plan
+  then recreated them and replaced their rules. Refresh and the ID lookup after
+  create now read every page
+  ([#36](https://github.com/zsoftly/terraform-provider-zcp/issues/36)).
+
+### Changed
+
+- The provider now builds against zcp-cli v1.3.1.
+
 ## [v1.3.0] - 2026-11-05
 
 ### Added
