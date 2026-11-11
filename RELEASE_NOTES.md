@@ -1,28 +1,28 @@
-# terraform-provider-zcp v1.3.0 Release Notes
+# terraform-provider-zcp v1.3.1 Release Notes
 
-Provider v1.3.0 adds ZCP CLI profile authentication and builds against
-`github.com/zsoftly/zcp-cli` v1.3.0. A provider can use a named CLI profile
-through `profile` or `ZCP_PROFILE`. When neither is set, it uses the active CLI
-profile.
+Provider v1.3.1 fixes `zcp_network_acl` for VPCs with more than one page of
+network ACLs and builds against `github.com/zsoftly/zcp-cli` v1.3.1.
 
-The selected profile supplies the API URL and default project. Bearer-token
-precedence is `bearer_token`, `ZCP_BEARER_TOKEN`, then the profile token. An
-explicitly selected profile must exist. The provider reports unknown provider
-configuration values instead of falling back to environment or profile values.
-It does not try another credential when the selected credential is rejected.
+## Fixed
 
-```hcl
-provider "zcp" {
-  profile = "development"
-}
-```
+**ACLs in larger VPCs stay in state.** The ZCP API returns a VPC's network ACLs
+in pages, 10 by default. The provider read only the first page. Once a VPC had
+more than 10 ACLs, refresh treated the oldest ones as deleted. The next plan
+then proposed to recreate those ACLs and replace all of their rules. Applying it
+would interrupt traffic on the attached networks. The provider did not delete
+the ACLs or their rules on the platform.
+
+The provider now reads every page when it refreshes `zcp_network_acl` and when
+it looks up the ID of a newly created ACL.
+
+If you held back applies because a plan proposed to recreate existing ACLs,
+upgrade first, then run a new plan. Refresh keeps those ACLs, and the plan drops
+their create and destroy actions.
 
 ## Upgrade
 
-Set the provider constraint to `~> 1.3.0`, then install the release with the
-same workflow used for prior versions:
+The `~> 1.3.0` constraint already allows this release. Run
+`terraform init -upgrade` for Terraform or `tofu init -upgrade` for OpenTofu,
+then review the plan before applying changes.
 
-Run `terraform init -upgrade` for Terraform or `tofu init -upgrade` for
-OpenTofu.
-
-Review the plan before applying changes.
+Reported in [#36](https://github.com/zsoftly/terraform-provider-zcp/issues/36).
