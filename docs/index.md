@@ -6,7 +6,7 @@ description: |-
 
 # ZCP Provider
 
-The ZCP provider manages [ZSoftly Cloud Platform](https://zcp.zsoftly.ca)
+The ZCP provider manages [ZSoftly Cloud Platform](https://zsoftly.ca)
 resources: compute instances, networks, Kubernetes clusters, object storage, and
 more.
 
